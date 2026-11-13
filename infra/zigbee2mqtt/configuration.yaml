@@ -1,0 +1,37 @@
+# Cấu hình Zigbee2MQTT cho Raspberry Pi 3 + USB dongle.
+# Docs: https://www.zigbee2mqtt.io/guide/configuration/
+homeassistant: false
+permit_join: false # chỉ bật khi ghép thiết bị mới (qua frontend hoặc topic bridge/request/permit_join)
+
+mqtt:
+  base_topic: zigbee2mqtt
+  server: mqtt://mosquitto:1883
+
+serial:
+  # Đường dẫn BÊN TRONG container (compose map ZIGBEE_DEVICE -> /dev/ttyACM0).
+  # Trên host dùng đường dẫn /dev/serial/by-id/usb-... (xem `ls /dev/serial/by-id/`) làm ZIGBEE_DEVICE.
+  port: /dev/ttyACM0
+  # Sonoff ZBDongle-E (EFR32MG21): adapter `ember`. Dongle này CHỈ hỗ trợ điều khiển luồng phần mềm
+  # nên không đặt rtscts: true (mặc định false). Nguồn: zigbee2mqtt.io/guide/adapters/emberznet.html
+  # Cần firmware COORDINATOR (NCP) EmberZNet 7.4.x trở lên (Z2M hỗ trợ 7.4–9.1 theo tài liệu), KHÔNG dùng firmware router.
+  # baudrate: tài liệu không nêu riêng cho dongle này; bỏ trống để dùng mặc định. Chỉ chỉnh nếu Z2M báo lỗi kết nối.
+  adapter: ember
+
+frontend:
+  enabled: true
+  port: 8080
+
+advanced:
+  # Đổi network_key/pan_id/ext_pan_id sang random khi triển khai thật (để "generate").
+  network_key: GENERATE
+  pan_id: GENERATE
+  ext_pan_id: GENERATE
+  # Thiết bị chỉ báo trạng thái đầy đủ khi cần thiết -> nhẹ cho Pi 3.
+  log_level: info
+  last_seen: ISO_8601
+
+availability:
+  enabled: true # publish zigbee2mqtt/<name>/availability online|offline
+
+device_options:
+  retain: false

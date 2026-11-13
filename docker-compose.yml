@@ -1,0 +1,143 @@
+# Smart Home — môi trường dev/giả lập.
+#
+#   docker compose up --build                       # cloud-side + giả lập Zigbee (không cần dongle)
+#   docker compose --profile hardware up -d zigbee2mqtt   # dùng Zigbee2MQTT thật + USB dongle (xem README)
+#
+# Hai "vùng" mô phỏng:
+#   [CLOUD] postgres + backend           -> thực tế chạy trên hạ tầng Cloudflare/VPS
+#   [EDGE ] mosquitto + z2m/simulator + gateway -> thực tế chạy trên Raspberry Pi 3 tại nhà
+
+name: smarthome
+
+services:
+  # ---------------- CLOUD ----------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: smart
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-smart_dev_pw}
+      POSTGRES_DB: smart
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smart -d smart"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgres://smart:${POSTGRES_PASSWORD:-smart_dev_pw}@postgres:5432/smart
+      JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-dev-only-change-me}
+      BIND_ADDR: 0.0.0.0:8080
+      RUST_LOG: info,sqlx=warn
+      # Giới hạn đăng nhập theo IP: khi backend CHỈ truy cập được qua Cloudflare Tunnel (không publish cổng 8080),
+      # đặt TRUSTED_IP_HEADER=CF-Connecting-IP để lấy IP thật. Để trống nếu backend lộ trực tiếp (header giả mạo được).
+      TRUSTED_IP_HEADER: ${TRUSTED_IP_HEADER:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+  # Tuỳ chọn: public backend qua Cloudflare Tunnel (không cần mở port).
+  #   CLOUDFLARE_TUNNEL_TOKEN=... docker compose --profile tunnel up -d cloudflared
+  cloudflared:
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on: [backend]
+
+  # ---------------- EDGE (Pi) ----------------
+  # Broker bắt buộc đăng nhập + ACL (infra/mosquitto). Mật khẩu dưới đây CHỈ cho dev (cổng chỉ mở ở 127.0.0.1);
+  # triển khai thật dùng edge/docker-compose.yml với mật khẩu ngẫu nhiên từ edge/gen-secrets.sh.
+  mosquitto:
+    image: eclipse-mosquitto:2
+    entrypoint: ["/bin/sh", "/mosquitto/entrypoint.sh"]
+    environment:
+      MQTT_PASSWORD_Z2M: ${MQTT_PASSWORD_Z2M:-dev-only-z2m-password}
+      MQTT_PASSWORD_GATEWAY: ${MQTT_PASSWORD_GATEWAY:-dev-only-gateway-password}
+      MQTT_PASSWORD_MATTERBRIDGE: ${MQTT_PASSWORD_MATTERBRIDGE:-dev-only-matterbridge-password}
+    volumes:
+      - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./infra/mosquitto/acl.conf:/mosquitto/config/acl.conf:ro
+      - ./infra/mosquitto/entrypoint.sh:/mosquitto/entrypoint.sh:ro
+    ports:
+      - "127.0.0.1:1883:1883"
+
+  # Giả lập Zigbee2MQTT + frontend web (thay Pi/dongle): http://localhost:8081
+  # Permit join, ghép thiết bị ảo, đổi tên, xoá, điều khiển. Không chạy cùng profile `hardware` (trùng cổng 8081).
+  zigbee-sim:
+    profiles: ["sim"]
+    build: ./infra/zigbee-sim
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_USER: z2m
+      MQTT_PASSWORD: ${MQTT_PASSWORD_Z2M:-dev-only-z2m-password}
+      SENSOR_PERIOD: "20" # giây; 0 = cảm biến không tự đổi trạng thái
+    volumes:
+      - zigbee-sim-data:/data # lưu thiết bị đã ghép: khởi động lại simulator không làm mất thiết bị
+    depends_on: [mosquitto]
+    ports:
+      - "127.0.0.1:8081:8080"
+
+  # Zigbee2MQTT thật (profile hardware). Pi 3 + dongle: chỉnh `devices` bên dưới.
+  zigbee2mqtt:
+    profiles: ["hardware"]
+    image: koenkk/zigbee2mqtt:latest
+    restart: unless-stopped
+    environment:
+      ZIGBEE2MQTT_CONFIG_MQTT_USER: z2m
+      ZIGBEE2MQTT_CONFIG_MQTT_PASSWORD: ${MQTT_PASSWORD_Z2M:-dev-only-z2m-password}
+    volumes:
+      - ./infra/zigbee2mqtt:/app/data
+    devices:
+      - ${ZIGBEE_DEVICE:-/dev/ttyUSB0}:/dev/ttyACM0
+    ports:
+      - "8081:8080" # Z2M frontend
+    depends_on: [mosquitto]
+
+  # Matter bridge (Apple Home / Google Home): COMPOSE_PROFILES=sim,matter
+  # Dev: chạy trong mạng compose nên Home app thật KHÔNG ghép được (mDNS không ra LAN, nhất là Docker Desktop);
+  # dùng để kiểm tra mã QR, danh sách thiết bị đưa ra Matter và luồng trong app. Pi thật: edge/docker-compose.yml.
+  matterbridge:
+    profiles: ["matter"]
+    build: ./infra/matterbridge
+    environment:
+      MQTT_URL: mqtt://mosquitto
+      MQTT_USERNAME: matterbridge
+      MQTT_PASSWORD: ${MQTT_PASSWORD_MATTERBRIDGE:-dev-only-matterbridge-password}
+      MB_BIND: 0.0.0.0 # chỉ publish ra 127.0.0.1 bên dưới; frontend mặc định KHÔNG có mật khẩu
+    volumes:
+      - matterbridge-data:/root/.matterbridge # chứa thông tin ghép nối: mất volume = phải ghép lại với Home app
+    ports:
+      - "127.0.0.1:8283:8283"
+    depends_on: [mosquitto]
+
+  gateway:
+    build: ./gateway
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      MQTT_USER: gateway
+      MQTT_PASSWORD: ${MQTT_PASSWORD_GATEWAY:-dev-only-gateway-password}
+      MATTERBRIDGE_URL: ${MATTERBRIDGE_URL:-ws://matterbridge:8283}
+      MATTERBRIDGE_PASSWORD: ${MATTERBRIDGE_PASSWORD:-}
+      CLOUD_WS_URL: ${CLOUD_WS_URL:-ws://backend:8080/gw/ws}
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:-}
+      RUST_LOG: info
+    depends_on: [mosquitto, backend]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  matterbridge-data:
+  zigbee-sim-data:
+
+# Mặc định `docker compose up` chỉ chạy service không có profile. Để chạy cả sim:
+#   COMPOSE_PROFILES=sim docker compose up --build

@@ -1,0 +1,223 @@
+//! Kênh WebSocket giữa gateway (Pi) và cloud. Gateway chủ động kết nối ra ngoài (outbound) nên
+//! Pi không cần public IP / mở port, đi xuyên NAT và qua được Cloudflare.
+use axum::{
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        State,
+    },
+    http::HeaderMap,
+    response::Response,
+};
+use futures::{SinkExt, StreamExt};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::sync::Arc;
+
+use tokio::sync::{mpsc, Notify};
+use uuid::Uuid;
+
+use crate::{
+    auth,
+    error::{ApiError, ApiResult},
+    AppState,
+};
+
+#[derive(Clone)]
+struct Gw {
+    id: Uuid,
+    tenant_id: Uuid,
+    home_id: Uuid,
+    token_hash: String,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum GwMsg {
+    /// payload của zigbee2mqtt/bridge/devices
+    Devices { devices: Vec<Value> },
+    /// payload của zigbee2mqtt/<friendly_name>
+    State { friendly_name: String, payload: Value },
+    /// payload của zigbee2mqtt/<friendly_name>/availability, đã đổi thành bool
+    Availability { friendly_name: String, online: bool },
+    /// Trả lời yêu cầu matter_* của cloud (xem routes::matter_request)
+    MatterReply { id: Uuid, info: Option<Value>, error: Option<String> },
+    Ping,
+}
+
+pub async fn handler(State(st): State<AppState>, headers: HeaderMap, ws: WebSocketUpgrade) -> ApiResult<Response> {
+    let token = auth::bearer(&headers).ok_or(ApiError::Unauthorized)?;
+    let token_hash = auth::hash_token(&token);
+    let row: Option<(Uuid, Uuid, Uuid)> =
+        sqlx::query_as("SELECT id, tenant_id, home_id FROM gateways WHERE token_hash = $1")
+            .bind(&token_hash)
+            .fetch_optional(&st.db)
+            .await?;
+    let (id, tenant_id, home_id) = row.ok_or(ApiError::Unauthorized)?;
+    let gw = Gw { id, tenant_id, home_id, token_hash };
+    Ok(ws.on_upgrade(move |socket| session(st, gw, socket)))
+}
+
+async fn session(st: AppState, gw: Gw, socket: WebSocket) {
+    tracing::info!(gateway = %gw.id, home = %gw.home_id, "gateway connected");
+    let (mut sink, mut stream) = socket.split();
+    let (tx, mut rx) = mpsc::channel::<String>(64);
+    let kill = Arc::new(Notify::new());
+    st.hub.register_gateway(gw.id, gw.home_id, tx.clone(), kill.clone());
+    // Token có thể vừa bị thu hồi giữa lúc xác thực và lúc đăng ký → kiểm tra lại.
+    let still_valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM gateways WHERE id = $1 AND token_hash = $2)")
+        .bind(gw.id)
+        .bind(&gw.token_hash)
+        .fetch_one(&st.db)
+        .await
+        .unwrap_or(false);
+    if !still_valid {
+        st.hub.unregister_gateway(gw.id, &tx);
+        return;
+    }
+    st.hub.publish(gw.home_id, json!({"type": "gateway", "online": true}).to_string());
+    touch(&st, &gw).await;
+
+    let writer = tokio::spawn(async move {
+        while let Some(m) = rx.recv().await {
+            if sink.send(Message::Text(m)).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    loop {
+        tokio::select! {
+            _ = kill.notified() => {
+                tracing::info!(gateway = %gw.id, "gateway kicked (token revoked or gateway removed)");
+                break;
+            }
+            msg = stream.next() => match msg {
+                Some(Ok(Message::Text(t))) => match serde_json::from_str::<GwMsg>(&t) {
+                    Ok(m) => {
+                        if let Err(e) = handle(&st, &gw, m).await {
+                            tracing::warn!(gateway = %gw.id, "handle error: {e:?}");
+                        }
+                    }
+                    Err(e) => tracing::warn!(gateway = %gw.id, "bad message: {e}"),
+                },
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                _ => {}
+            },
+        }
+    }
+
+    writer.abort();
+    st.hub.unregister_gateway(gw.id, &tx);
+    if !st.hub.gateway_online(gw.home_id) {
+        st.hub.publish(gw.home_id, json!({"type": "gateway", "online": false}).to_string());
+    }
+    tracing::info!(gateway = %gw.id, "gateway disconnected");
+}
+
+async fn touch(st: &AppState, gw: &Gw) {
+    let _ = sqlx::query("UPDATE gateways SET last_seen_at = now() WHERE id = $1")
+        .bind(gw.id)
+        .execute(&st.db)
+        .await;
+}
+
+/// Phân loại thiết bị từ `exposes` của Zigbee2MQTT: light | switch | sensor | other.
+fn kind_of(exposes: &[Value]) -> &'static str {
+    let has_type = |t: &str| exposes.iter().any(|e| e.get("type").and_then(Value::as_str) == Some(t));
+    let has_prop = |ps: &[&str]| {
+        exposes.iter().any(|e| e.get("property").and_then(Value::as_str).is_some_and(|p| ps.contains(&p)))
+    };
+    if has_type("light") {
+        "light"
+    } else if has_type("switch") {
+        "switch"
+    } else if has_prop(&["contact", "occupancy", "motion", "water_leak", "smoke", "temperature", "humidity"]) {
+        "sensor"
+    } else {
+        "other"
+    }
+}
+
+async fn handle(st: &AppState, gw: &Gw, msg: GwMsg) -> ApiResult<()> {
+    match msg {
+        GwMsg::Ping => touch(st, gw).await,
+        GwMsg::MatterReply { id, info, error } => st.hub.resolve(gw.id, id, json!({ "info": info, "error": error })),
+        GwMsg::Devices { devices } => {
+            let mut keep: Vec<String> = Vec::new();
+            for d in devices {
+                if d.get("type").and_then(Value::as_str) == Some("Coordinator") {
+                    continue;
+                }
+                let (Some(ieee), Some(fname), Some(def)) = (
+                    d.get("ieee_address").and_then(Value::as_str),
+                    d.get("friendly_name").and_then(Value::as_str),
+                    d.get("definition").filter(|v| v.is_object()),
+                ) else {
+                    continue; // thiết bị chưa được interview xong / không hỗ trợ
+                };
+                let exposes = def.get("exposes").cloned().unwrap_or_else(|| json!([]));
+                let kind = kind_of(exposes.as_array().map(Vec::as_slice).unwrap_or(&[]));
+                sqlx::query(
+                    "INSERT INTO devices (tenant_id, home_id, gateway_id, ieee_address, friendly_name, name, vendor, model, kind, exposes, description)
+                     VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,$10)
+                     ON CONFLICT (gateway_id, ieee_address) DO UPDATE SET
+                       -- tên hiển thị đi theo tên Z2M, trừ khi người dùng đã tự đặt tên khác trong app
+                       name = CASE WHEN devices.name = devices.friendly_name THEN EXCLUDED.friendly_name ELSE devices.name END,
+                       friendly_name = EXCLUDED.friendly_name, vendor = EXCLUDED.vendor, model = EXCLUDED.model,
+                       kind = EXCLUDED.kind, exposes = EXCLUDED.exposes, description = EXCLUDED.description",
+                )
+                .bind(gw.tenant_id)
+                .bind(gw.home_id)
+                .bind(gw.id)
+                .bind(ieee)
+                .bind(fname)
+                .bind(def.get("vendor").and_then(Value::as_str))
+                .bind(def.get("model").and_then(Value::as_str))
+                .bind(kind)
+                .bind(&exposes)
+                .bind(def.get("description").and_then(Value::as_str))
+                .execute(&st.db)
+                .await?;
+                keep.push(ieee.to_owned());
+            }
+            // Thiết bị đã bị gỡ khỏi Zigbee2MQTT thì gỡ khỏi hệ thống.
+            sqlx::query("DELETE FROM devices WHERE gateway_id = $1 AND NOT (ieee_address = ANY($2))")
+                .bind(gw.id)
+                .bind(&keep)
+                .execute(&st.db)
+                .await?;
+            st.hub.publish(gw.home_id, json!({"type": "devices_changed"}).to_string());
+        }
+        GwMsg::State { friendly_name, payload } => {
+            if !payload.is_object() {
+                return Ok(());
+            }
+            let row: Option<(Uuid, Value)> = sqlx::query_as(
+                "UPDATE devices SET state = state || $3, last_seen_at = now()
+                 WHERE gateway_id = $1 AND friendly_name = $2 RETURNING id, state",
+            )
+            .bind(gw.id)
+            .bind(&friendly_name)
+            .bind(&payload)
+            .fetch_optional(&st.db)
+            .await?;
+            if let Some((id, state)) = row {
+                st.hub.publish(gw.home_id, json!({"type": "device_state", "device_id": id, "state": state}).to_string());
+            }
+        }
+        GwMsg::Availability { friendly_name, online } => {
+            let id: Option<Uuid> = sqlx::query_scalar(
+                "UPDATE devices SET online = $3 WHERE gateway_id = $1 AND friendly_name = $2 RETURNING id",
+            )
+            .bind(gw.id)
+            .bind(&friendly_name)
+            .bind(online)
+            .fetch_optional(&st.db)
+            .await?;
+            if let Some(id) = id {
+                st.hub.publish(gw.home_id, json!({"type": "device_online", "device_id": id, "online": online}).to_string());
+            }
+        }
+    }
+    Ok(())
+}

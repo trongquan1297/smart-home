@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Zigbee2MQTT (Simulator)</title>
+<style>
+  :root { --bg:#f4f6f8; --card:#fff; --fg:#1b2733; --mut:#6b7a89; --pri:#0f9d8a; --bd:#dde3e9; --warn:#b45309; --err:#b91c1c; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12181e; --card:#1b242d; --fg:#e6edf3; --mut:#8b9aa8; --bd:#2b3743; --warn:#f59e0b; --err:#f87171; } }
+  * { box-sizing:border-box }
+  body { margin:0; font:14px/1.45 system-ui,sans-serif; background:var(--bg); color:var(--fg) }
+  header { background:var(--pri); color:#fff; padding:12px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap }
+  header h1 { font-size:18px; margin:0; flex:1 }
+  .sim { background:rgba(0,0,0,.25); padding:2px 8px; border-radius:10px; font-size:12px }
+  main { max-width:1000px; margin:0 auto; padding:16px }
+  .note { background:var(--card); border:1px solid var(--bd); border-left:4px solid var(--warn); padding:8px 12px; border-radius:6px; color:var(--mut); margin-bottom:16px }
+  .card { background:var(--card); border:1px solid var(--bd); border-radius:8px; padding:12px 16px; margin-bottom:16px }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+  button, select { font:inherit; padding:6px 12px; border-radius:6px; border:1px solid var(--bd); background:var(--card); color:var(--fg); cursor:pointer }
+  button.pri { background:var(--pri); border-color:var(--pri); color:#fff }
+  button.on { background:var(--pri); color:#fff; border-color:var(--pri) }
+  button.danger { color:var(--err) }
+  button:disabled { opacity:.45; cursor:not-allowed }
+  table { width:100%; border-collapse:collapse }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--bd); vertical-align:top }
+  th { color:var(--mut); font-weight:600; font-size:12px; text-transform:uppercase }
+  .mut { color:var(--mut); font-size:12px }
+  .chip { display:inline-block; padding:1px 8px; border:1px solid var(--bd); border-radius:10px; margin:0 4px 4px 0; font-size:12px }
+  #msg { min-height:20px; color:var(--err) }
+  @media (max-width:700px) { th:nth-child(3), td:nth-child(3) { display:none } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Zigbee2MQTT <span class="sim">SIMULATOR</span></h1>
+  <span id="permit"></span>
+  <button id="permitBtn"></button>
+</header>
+<main>
+  <div class="note">Đây là bộ giả lập thay cho Raspberry Pi + dongle — <b>không phải</b> giao diện Zigbee2MQTT thật. Luồng ghép nối, đổi tên, xoá thiết bị được mô phỏng bằng đúng các topic MQTT để backend/app thử nghiệm.</div>
+
+  <div class="card">
+    <b>Ghép thiết bị mới (mô phỏng)</b>
+    <div class="mut" style="margin:4px 0 8px">Bật Permit join, chọn model rồi bấm "Ghép". Thiết bị xuất hiện sau vài giây với tên mặc định là địa chỉ IEEE (giống Zigbee2MQTT thật).</div>
+    <div class="row">
+      <select id="model"></select>
+      <button id="pairBtn" class="pri">Ghép (giả lập nhấn nút trên thiết bị)</button>
+      <span id="pending" class="mut"></span>
+    </div>
+  </div>
+
+  <div id="msg"></div>
+  <div class="card" style="padding:0 10px">
+    <table>
+      <thead><tr><th>Tên</th><th>Model</th><th>IEEE</th><th>Trạng thái / điều khiển</th><th></th></tr></thead>
+      <tbody id="devices"></tbody>
+    </table>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let S = null;
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) { $('msg').textContent = j.error || 'Lỗi'; throw new Error(j.error); }
+  $('msg').textContent = '';
+  return j;
+}
+const act = (path, body) => api(path, body).then(refresh).catch(() => {});
+
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function stateCell(d) {
+  const out = [];
+  for (const [k, v] of Object.entries(d.state)) {
+    if (k.startsWith('state')) {
+      const label = k === 'state' ? 'Công tắc' : 'Gang ' + k.split('_')[1];
+      out.push(`<button class="${v === 'ON' ? 'on' : ''}" data-set="${esc(d.name)}" data-key="${esc(k)}">${label}: ${v}</button>`);
+    } else if (k !== 'linkquality') {
+      out.push(`<span class="chip">${esc(k)}: ${esc(JSON.stringify(v))}</span>`);
+    }
+  }
+  if ('contact' in d.state || 'occupancy' in d.state)
+    out.push(`<button data-trigger="${esc(d.name)}">Kích hoạt cảm biến</button>`);
+  out.push(`<div class="mut">linkquality: ${d.state.linkquality}</div>`);
+  return out.join(' ');
+}
+
+function render() {
+  const p = S.permit_join_left;
+  $('permit').textContent = p > 0 ? `Permit join: còn ${p}s` : 'Permit join: tắt';
+  $('permitBtn').textContent = p > 0 ? 'Tắt permit join' : 'Bật permit join';
+  $('permitBtn').className = p > 0 ? 'on' : 'pri';
+  $('pairBtn').disabled = p <= 0;
+  $('pending').textContent = S.pending ? `Đang interview ${S.pending} thiết bị…` : '';
+  const sel = $('model');
+  if (!sel.options.length) for (const m of S.models) sel.add(new Option(`${m.model} — ${m.desc}`, m.model));
+  $('devices').innerHTML = S.devices.map(d => `
+    <tr>
+      <td><b>${esc(d.name)}</b><div class="mut">${esc(d.desc)}</div></td>
+      <td>${esc(d.model)}<div class="mut">${esc(d.vendor)} · ${esc(d.type)}</div></td>
+      <td class="mut">${esc(d.ieee)}</td>
+      <td>${stateCell(d)}</td>
+      <td><button data-rename="${esc(d.name)}">Đổi tên</button> <button class="danger" data-remove="${esc(d.name)}">Xoá</button></td>
+    </tr>`).join('') || '<tr><td colspan="5" class="mut">Chưa có thiết bị</td></tr>';
+}
+
+async function refresh() { try { S = await api('/api/state'); render(); } catch (e) {} }
+
+$('permitBtn').onclick = () => act('/api/permit_join', { enable: S.permit_join_left <= 0 });
+$('pairBtn').onclick = () => act('/api/pair', { model: $('model').value });
+$('devices').onclick = (e) => {
+  const t = e.target.closest('button'); if (!t) return;
+  const d = t.dataset;
+  if (d.set) act('/api/set', { name: d.set, payload: { [d.key]: 'TOGGLE' } });
+  else if (d.trigger) act('/api/trigger', { name: d.trigger });
+  else if (d.rename) { const to = prompt('Tên mới cho ' + d.rename, d.rename); if (to && to !== d.rename) act('/api/rename', { from: d.rename, to }); }
+  else if (d.remove && confirm('Xoá thiết bị ' + d.remove + '?')) act('/api/remove', { name: d.remove });
+};
+refresh(); setInterval(refresh, 1500);
+</script>
+</body>
+</html>

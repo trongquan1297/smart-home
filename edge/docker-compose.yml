@@ -1,0 +1,81 @@
+# Chạy trên Raspberry Pi 3 (OS 64-bit khuyến nghị): Zigbee2MQTT + Mosquitto + gateway agent.
+# Cài đặt:
+#   1) cp .env.example .env  → điền CLOUD_WS_URL, GATEWAY_TOKEN, ZIGBEE_DEVICE
+#   2) ./gen-secrets.sh      → sinh mật khẩu MQTT ngẫu nhiên vào .env (không ghi đè nếu đã có)
+#   3) docker compose up -d
+# Image gateway build sẵn trên máy dev (nhanh hơn build trên Pi 3):
+#   docker buildx build --platform linux/arm64 -t <registry>/smart-gateway:latest ./gateway --push
+# rồi đặt GATEWAY_IMAGE=<registry>/smart-gateway:latest.
+name: smarthome-edge
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/mosquitto/entrypoint.sh"]
+    environment: # tạo bằng ./gen-secrets.sh; thiếu/ngắn hơn 16 ký tự thì broker từ chối chạy
+      MQTT_PASSWORD_Z2M: ${MQTT_PASSWORD_Z2M:?chạy ./gen-secrets.sh}
+      MQTT_PASSWORD_GATEWAY: ${MQTT_PASSWORD_GATEWAY:?chạy ./gen-secrets.sh}
+      MQTT_PASSWORD_MATTERBRIDGE: ${MQTT_PASSWORD_MATTERBRIDGE:?chạy ./gen-secrets.sh}
+    volumes:
+      - ../infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../infra/mosquitto/acl.conf:/mosquitto/config/acl.conf:ro
+      - ../infra/mosquitto/entrypoint.sh:/mosquitto/entrypoint.sh:ro
+      - mosquitto-data:/mosquitto/data
+    # Chỉ nghe ở loopback của Pi: Matterbridge và gateway (network_mode: host) kết nối qua 127.0.0.1;
+    # không lộ ra LAN. Z2M nằm trong network compose nên vẫn gọi được bằng tên `mosquitto`.
+    ports:
+      - "127.0.0.1:1883:1883"
+
+  zigbee2mqtt:
+    image: koenkk/zigbee2mqtt:latest
+    restart: unless-stopped
+    depends_on: [mosquitto]
+    environment:
+      ZIGBEE2MQTT_CONFIG_MQTT_USER: z2m
+      ZIGBEE2MQTT_CONFIG_MQTT_PASSWORD: ${MQTT_PASSWORD_Z2M:?chạy ./gen-secrets.sh}
+    volumes:
+      - ../infra/zigbee2mqtt:/app/data
+    devices:
+      # Nên dùng /dev/serial/by-id/usb-... để không đổi tên khi cắm lại.
+      - ${ZIGBEE_DEVICE:-/dev/ttyUSB0}:/dev/ttyACM0
+    ports:
+      - "8081:8080" # frontend Z2M, chỉ dùng trong LAN khi ghép thiết bị
+
+  # Matter bridge: đưa thiết bị Zigbee2MQTT ra Apple Home / Google Home (xem README, mục Matter).
+  # BẮT BUỘC network_mode: host để mDNS/UDP của Matter chạy trên LAN. Pi và điện thoại/loa thông minh phải cùng mạng.
+  matterbridge:
+    build: ../infra/matterbridge
+    network_mode: host
+    restart: unless-stopped
+    stop_grace_period: 60s
+    depends_on: [mosquitto, zigbee2mqtt]
+    environment:
+      MQTT_URL: mqtt://127.0.0.1
+      MQTT_PORT: "1883"
+      MQTT_USERNAME: matterbridge
+      MQTT_PASSWORD: ${MQTT_PASSWORD_MATTERBRIDGE:?chạy ./gen-secrets.sh}
+      MB_BIND: 127.0.0.1 # frontend mặc định KHÔNG có mật khẩu -> chỉ truy cập từ Pi (ssh tunnel khi cần)
+      MATTER_SWITCH_AS: ${MATTER_SWITCH_AS:-light} # light | outlet | switch
+    volumes:
+      - matterbridge-data:/root/.matterbridge # chứa thông tin ghép nối: sao lưu, mất = phải ghép lại với Home app
+
+  gateway:
+    image: ${GATEWAY_IMAGE:-smarthome-gateway:local}
+    build: ../gateway
+    restart: unless-stopped
+    depends_on: [mosquitto, matterbridge]
+    network_mode: host # cần để gọi Matterbridge ở 127.0.0.1:8283
+    environment:
+      MQTT_HOST: 127.0.0.1
+      MQTT_USER: gateway
+      MQTT_PASSWORD: ${MQTT_PASSWORD_GATEWAY:?chạy ./gen-secrets.sh}
+      MATTERBRIDGE_URL: ws://127.0.0.1:8283
+      MATTERBRIDGE_PASSWORD: ${MATTERBRIDGE_PASSWORD:-}
+      CLOUD_WS_URL: ${CLOUD_WS_URL:?set CLOUD_WS_URL, vd wss://api.example.com/gw/ws}
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:?set GATEWAY_TOKEN}
+      RUST_LOG: info
+
+volumes:
+  mosquitto-data:
+  matterbridge-data:
