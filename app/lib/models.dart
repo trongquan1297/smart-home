@@ -14,8 +14,7 @@ enum ChannelType {
   final IconData icon;
   const ChannelType(this.id, this.label, this.icon);
 
-  static ChannelType parse(String? id) =>
-      ChannelType.values.firstWhere((t) => t.id == id, orElse: () => ChannelType.other);
+  static ChannelType parse(String? id) => ChannelType.values.firstWhere((t) => t.id == id, orElse: () => ChannelType.other);
 }
 
 class Reading {
@@ -38,14 +37,72 @@ class Home {
   final String id;
   final String tenantId;
   final String name;
-  final String role; // owner | admin | member | guest
-  Home({required this.id, required this.tenantId, required this.name, required this.role});
+  final String role; // owner | admin | member | renter | guest
+  /// Chỉ với khách thuê: thời điểm hết quyền truy cập.
+  final DateTime? accessUntil;
 
-  factory Home.fromJson(Map<String, dynamic> j) =>
-      Home(id: j['id'], tenantId: j['tenant_id'], name: j['name'], role: j['role']);
+  /// Chỉ với khách thuê: thời điểm bắt đầu có quyền (check-in) và trạng thái do máy chủ báo (scheduled | active).
+  final DateTime? accessFrom;
+  final String? accessStatus;
+
+  /// Vị trí căn hộ cho geofence "rời nhà" (do quản trị đặt); null nếu chưa đặt.
+  final double? geoLat, geoLng;
+  final int geoRadius;
+  Home({
+    required this.id,
+    required this.tenantId,
+    required this.name,
+    required this.role,
+    this.accessUntil,
+    this.accessFrom,
+    this.accessStatus,
+    this.geoLat,
+    this.geoLng,
+    this.geoRadius = 150,
+  });
+  bool get hasLocation => geoLat != null && geoLng != null;
+
+  factory Home.fromJson(Map<String, dynamic> j) => Home(
+    id: j['id'],
+    tenantId: j['tenant_id'],
+    name: j['name'],
+    role: j['role'],
+    accessUntil: j['access_until'] == null ? null : DateTime.parse(j['access_until']).toLocal(),
+    accessFrom: j['access_from'] == null ? null : DateTime.parse(j['access_from']).toLocal(),
+    accessStatus: j['access_status'],
+    geoLat: (j['geo_lat'] as num?)?.toDouble(),
+    geoLng: (j['geo_lng'] as num?)?.toDouble(),
+    geoRadius: (j['geo_radius_m'] as num?)?.toInt() ?? 150,
+  );
 
   bool get canControl => role != 'guest';
   bool get isAdmin => role == 'admin' || role == 'owner';
+  bool get isRenter => role == 'renter'; // khách thuê: chỉ bật/tắt, có thời hạn
+  /// Khách thuê đã nhận mã nhưng chưa tới giờ check-in (theo máy chủ): xem được thẻ đếm ngược, chưa vào được căn hộ.
+  bool get isWaiting => isRenter && accessStatus == 'scheduled';
+  bool get canRunScenes => role == 'member' || isAdmin;
+}
+
+/// "13:05 13/11"
+String fmtDateTime(DateTime t) =>
+    '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')} ${t.day.toString().padLeft(2, '0')}/${t.month.toString().padLeft(2, '0')}';
+
+/// Đồng hồ đếm ngược: "02:14:55", hoặc "1 ngày 02:14:55" khi còn từ 24 giờ.
+String fmtCountdown(Duration d) {
+  if (d.isNegative) d = Duration.zero;
+  String two(int n) => n.toString().padLeft(2, '0');
+  final hms = '${two(d.inHours % 24)}:${two(d.inMinutes % 60)}:${two(d.inSeconds % 60)}';
+  return d.inDays > 0 ? '${d.inDays} ngày $hms' : hms;
+}
+
+/// Khoảng thời gian còn lại, dạng "2 ngày 3 giờ", "5 giờ 20 phút", "12 phút".
+String fmtRemaining(Duration d) {
+  if (d.inSeconds <= 0) return '0 phút';
+  if (d.inMinutes < 1) return 'dưới 1 phút';
+  final days = d.inDays, hours = d.inHours % 24, mins = d.inMinutes % 60;
+  if (days > 0) return hours > 0 ? '$days ngày $hours giờ' : '$days ngày';
+  if (d.inHours > 0) return mins > 0 ? '${d.inHours} giờ $mins phút' : '${d.inHours} giờ';
+  return '${d.inMinutes} phút';
 }
 
 /// Loại phòng → icon. `id` trùng giá trị backend chấp nhận.
@@ -126,6 +183,12 @@ class Device {
   final List<String> switchKeys; // vd: ['state_1','state_2'] hoặc ['state']
   final String? description; // mô tả model do Zigbee2MQTT báo, vd "Wall switch 3 gang"
   final String? model;
+  final String? vendor; // hãng (Aqara, Tuya, VSmart…) do Zigbee2MQTT báo
+  final bool isCover; // rèm / cửa cuốn: state OPEN/CLOSE/STOP + position
+  final bool hasPosition;
+  final bool hasPresence; // cảm biến hiện diện (expose `occupancy`)
+  final bool hasDoor; // cảm biến cửa (expose `contact`)
+  final Map<String, String> units; // đơn vị theo thuộc tính, lấy từ exposes (vd temperature → °C)
   Map<String, Channel> channels;
 
   Device({
@@ -138,24 +201,104 @@ class Device {
     required this.switchKeys,
     this.description,
     this.model,
+    this.vendor,
+    this.isCover = false,
+    this.hasPosition = false,
+    this.hasPresence = false,
+    this.hasDoor = false,
+    this.units = const {},
     this.channels = const {},
   });
 
   factory Device.fromJson(Map<String, dynamic> j) => Device(
-        id: j['id'],
-        name: j['name'],
-        roomId: j['room_id'],
-        kind: j['kind'],
-        online: j['online'] ?? false,
-        state: Map<String, dynamic>.from(j['state'] ?? {}),
-        switchKeys: _stateKeys(j['exposes']),
-        description: j['description'],
-        model: j['model'],
-        channels: {
-          for (final e in Map<String, dynamic>.from(j['channels'] ?? {}).entries)
-            e.key: Channel(name: (e.value['name'] ?? '') as String, type: ChannelType.parse(e.value['type'])),
-        },
-      );
+    id: j['id'],
+    name: j['name'],
+    roomId: j['room_id'],
+    kind: j['kind'],
+    online: j['online'] ?? false,
+    state: Map<String, dynamic>.from(j['state'] ?? {}),
+    switchKeys: _stateKeys(j['exposes']),
+    description: j['description'],
+    model: j['model'],
+    vendor: j['vendor'],
+    isCover: _hasType(j['exposes'], 'cover'),
+    hasPosition: _hasCoverPosition(j['exposes']),
+    hasPresence: _hasProperty(j['exposes'], 'occupancy'),
+    hasDoor: _hasProperty(j['exposes'], 'contact'),
+    units: _units(j['exposes']),
+    channels: {
+      for (final e in Map<String, dynamic>.from(j['channels'] ?? {}).entries)
+        e.key: Channel(name: (e.value['name'] ?? '') as String, type: ChannelType.parse(e.value['type'])),
+    },
+  );
+
+  static bool _hasType(dynamic exposes, String type) {
+    var found = false;
+    void walk(dynamic n) {
+      if (n is List) {
+        n.forEach(walk);
+      } else if (n is Map) {
+        if (n['type'] == type) found = true;
+        walk(n['features']);
+      }
+    }
+
+    walk(exposes);
+    return found;
+  }
+
+  static bool _hasProperty(dynamic exposes, String name) {
+    var found = false;
+    void walk(dynamic n) {
+      if (n is List) {
+        n.forEach(walk);
+      } else if (n is Map) {
+        if (n['property'] == name) found = true;
+        walk(n['features']);
+      }
+    }
+
+    walk(exposes);
+    return found;
+  }
+
+  /// Cảm biến có thể chọn làm nguồn cảnh báo trong một ngữ cảnh.
+  bool get isAlertSensor => hasPresence || hasDoor;
+
+  static bool _hasCoverPosition(dynamic exposes) {
+    var found = false;
+    void walk(dynamic n, bool inCover) {
+      if (n is List) {
+        for (final e in n) {
+          walk(e, inCover);
+        }
+      } else if (n is Map) {
+        final cover = inCover || n['type'] == 'cover';
+        if (cover && n['property'] == 'position') found = true;
+        walk(n['features'], cover);
+      }
+    }
+
+    walk(exposes, false);
+    return found;
+  }
+
+  /// Đơn vị của từng thuộc tính số (vd {'temperature': '°C', 'voltage': 'mV'}).
+  static Map<String, String> _units(dynamic exposes) {
+    final out = <String, String>{};
+    void walk(dynamic n) {
+      if (n is List) {
+        n.forEach(walk);
+      } else if (n is Map) {
+        final p = n['property'], u = n['unit'];
+        if (p is String && u is String) out[p] = u;
+        walk(n['features']);
+      }
+    }
+
+    walk(exposes);
+    return out;
+  }
 
   /// Duyệt cây `exposes` của Zigbee2MQTT, lấy các thuộc tính binary ON/OFF tên `state*`.
   static List<String> _stateKeys(dynamic exposes) {
@@ -177,10 +320,27 @@ class Device {
 
   bool isOn(String key) => state[key] == 'ON';
 
-  /// Tên mặc định của gang: state_1 / state_l1 -> "Gang 1" (VSmart dùng state_1..state_N).
+  bool get isPlug {
+    final d = (description ?? '').toLowerCase();
+    return d.contains('plug') || d.contains('socket') || d.contains('outlet');
+  }
+
+  /// Tên mặc định của gang. Zigbee2MQTT đặt hậu tố theo endpoint: VSmart `state_1`, Tuya `state_l1`,
+  /// Aqara/Tuya nhiều gang `state_left` / `state_right` / `state_center`.
   String defaultLabel(String key) {
-    final m = RegExp(r'_l?(\d+)$').firstMatch(key);
-    return m == null ? 'Nguồn' : 'Gang ${m.group(1)}';
+    final m = RegExp(r'^state_(.+)$').firstMatch(key);
+    if (m == null) return isPlug ? 'Ổ cắm' : 'Nguồn';
+    final suf = m.group(1)!.toLowerCase();
+    final n = RegExp(r'^l?(\d+)$').firstMatch(suf);
+    if (n != null) return 'Gang ${n.group(1)}';
+    return switch (suf) {
+      'left' => 'Gang trái',
+      'right' => 'Gang phải',
+      'center' || 'middle' => 'Gang giữa',
+      'top' => 'Gang trên',
+      'bottom' => 'Gang dưới',
+      _ => 'Gang $suf',
+    };
   }
 
   /// Tên hiển thị của gang: tên người dùng đặt, nếu trống thì tên mặc định.
@@ -189,21 +349,31 @@ class Device {
     return n.isNotEmpty ? n : defaultLabel(key);
   }
 
-  ChannelType channelType(String key) => channels[key]?.type ?? ChannelType.other;
+  ChannelType channelType(String key) => channels[key]?.type ?? (isPlug ? ChannelType.outlet : ChannelType.other);
 
   /// Loại nhận dạng của thiết bị, dịch từ mô tả model của Zigbee2MQTT.
+  /// Loại thiết bị bằng tiếng Việt, suy từ mô tả model của Zigbee2MQTT (tiếng Anh, khác nhau theo hãng).
   String get typeLabel {
-    final d = description ?? '';
-    final gang = RegExp(r'^Wall switch (\d) gang$').firstMatch(d);
+    final raw = description ?? '';
+    final d = raw.toLowerCase();
+    final gang = RegExp(r'(\d)\s*gang').firstMatch(d);
+    if (isCover || d.contains('curtain') || d.contains('blind')) return 'Rèm / cửa cuốn';
+    if (isPlug) return d.contains('monitoring') || state.containsKey('power') ? 'Ổ cắm đo điện' : 'Ổ cắm';
     if (gang != null) return 'Công tắc ${gang.group(1)} gang';
-    switch (d) {
-      case 'Door/window sensor':
-        return 'Cảm biến cửa';
-      case 'Occupancy sensor':
-        return 'Cảm biến hiện diện';
-    }
-    if (d.isNotEmpty) return d;
-    return switch (kind) { 'switch' => 'Công tắc', 'light' => 'Đèn', 'sensor' => 'Cảm biến', _ => 'Thiết bị' };
+    if (d.contains('double rocker')) return 'Công tắc 2 gang';
+    if (d.contains('temperature') && d.contains('humidity')) return 'Cảm biến nhiệt độ & độ ẩm';
+    if (d.contains('water leak')) return 'Cảm biến rò nước';
+    if (d.contains('smoke')) return 'Cảm biến khói';
+    if (d.contains('door') || d.contains('window') || d.contains('contact')) return 'Cảm biến cửa';
+    if (d.contains('occupancy') || d.contains('motion') || d.contains('presence')) return 'Cảm biến hiện diện';
+    if (raw.isNotEmpty) return raw;
+    return switch (kind) {
+      'switch' => 'Công tắc',
+      'light' => 'Đèn',
+      'sensor' => 'Cảm biến',
+      'cover' => 'Rèm / cửa cuốn',
+      _ => 'Thiết bị',
+    };
   }
 
   bool get isSensor => kind == 'sensor';
@@ -225,6 +395,40 @@ class Device {
     if (t is bool) {
       out.add(Reading('Chống tháo', t ? 'Bị tác động' : 'Bình thường', t ? Icons.warning_amber_rounded : Icons.shield_outlined, t));
     }
+    // Số liệu đo theo tên thuộc tính chuẩn của Zigbee2MQTT (cùng một cách đọc cho Aqara, Tuya, VSmart…).
+    String fmt(num v, int digits) {
+      final t = v.toStringAsFixed(digits);
+      return t.contains('.') ? t.replaceFirst(RegExp(r'\.?0+$'), '') : t;
+    }
+
+    void measure(String key, String label, IconData icon, {String? unit, int digits = 1}) {
+      final v = state[key];
+      if (v is! num) return;
+      final u = units[key] ?? unit ?? '';
+      out.add(Reading(label, u.isEmpty ? fmt(v, digits) : '${fmt(v, digits)} ${u == '%' ? '%' : u}', icon, false));
+    }
+
+    measure('temperature', 'Nhiệt độ', Icons.thermostat_rounded, unit: '°C');
+    measure('humidity', 'Độ ẩm', Icons.water_drop_outlined, unit: '%', digits: 0);
+    measure('pressure', 'Áp suất', Icons.speed_rounded, unit: 'hPa', digits: 0);
+    measure('illuminance', 'Độ sáng', Icons.light_mode_outlined, unit: 'lx', digits: 0);
+    measure('illuminance_lux', 'Độ sáng', Icons.light_mode_outlined, unit: 'lx', digits: 0);
+    measure('power', 'Công suất', Icons.bolt_rounded, unit: 'W');
+    measure('current', 'Dòng điện', Icons.electrical_services_rounded, unit: 'A', digits: 2);
+    measure('energy', 'Điện năng', Icons.insights_rounded, unit: 'kWh', digits: 2);
+    if (units['voltage'] == 'V') measure('voltage', 'Điện áp', Icons.power_rounded, unit: 'V', digits: 0); // mV = điện áp pin, bỏ qua
+    final leak = state['water_leak'];
+    if (leak is bool) {
+      out.add(Reading('Rò nước', leak ? 'Có rò rỉ' : 'Khô ráo', leak ? Icons.water_damage_rounded : Icons.water_drop_outlined, leak));
+    }
+    final smoke = state['smoke'];
+    if (smoke is bool) {
+      out.add(Reading('Khói', smoke ? 'Có khói' : 'Bình thường', smoke ? Icons.local_fire_department_rounded : Icons.cloud_outlined, smoke));
+    }
+    final vib = state['vibration'];
+    if (vib is bool) {
+      out.add(Reading('Rung', vib ? 'Có rung' : 'Yên', vib ? Icons.vibration_rounded : Icons.do_not_disturb_on_outlined, vib));
+    }
     final b = state['battery'];
     final low = state['battery_low'];
     if (b is num) {
@@ -241,9 +445,22 @@ class Member {
   final String name;
   final String email;
   final String role;
-  Member({required this.userId, required this.name, required this.email, required this.role});
-  factory Member.fromJson(Map<String, dynamic> j) =>
-      Member(userId: j['user_id'], name: j['name'], email: j['email'], role: j['role']);
+  // Khách thuê: cửa sổ truy cập và trạng thái (scheduled | active | expired)
+  final DateTime? validFrom, validUntil;
+  final int? durationHours;
+  final String? status;
+  Member({required this.userId, required this.name, required this.email, required this.role, this.validFrom, this.validUntil, this.durationHours, this.status});
+  factory Member.fromJson(Map<String, dynamic> j) => Member(
+    userId: j['user_id'],
+    name: j['name'],
+    email: j['email'],
+    role: j['role'],
+    validFrom: j['valid_from'] == null ? null : DateTime.parse(j['valid_from']).toLocal(),
+    validUntil: j['valid_until'] == null ? null : DateTime.parse(j['valid_until']).toLocal(),
+    durationHours: j['duration_hours'],
+    status: j['status'],
+  );
+  bool get isRenter => role == 'renter';
 }
 
 /// Ứng dụng/hub Matter đã ghép với bridge (Apple Home, Google Home, ...).
@@ -276,14 +493,14 @@ class MatterInfo {
   });
 
   factory MatterInfo.fromJson(Map<String, dynamic> j) => MatterInfo(
-        available: j['available'] == true,
-        online: j['online'] == true,
-        commissioned: j['commissioned'] == true,
-        pairingOpen: j['pairing_open'] == true,
-        qr: j['qr'] as String?,
-        manualCode: j['manual_code'] as String?,
-        fabrics: [for (final f in (j['fabrics'] as List? ?? [])) MatterFabric.fromJson(Map<String, dynamic>.from(f))],
-      );
+    available: j['available'] == true,
+    online: j['online'] == true,
+    commissioned: j['commissioned'] == true,
+    pairingOpen: j['pairing_open'] == true,
+    qr: j['qr'] as String?,
+    manualCode: j['manual_code'] as String?,
+    fabrics: [for (final f in (j['fabrics'] as List? ?? [])) MatterFabric.fromJson(Map<String, dynamic>.from(f))],
+  );
 
   /// Mã thủ công 11 số hiển thị dạng 4-3-4 như các Home app.
   String? get manualCodeFormatted {
@@ -320,10 +537,10 @@ class SceneAction {
   final Map<String, String> payload; // vd {'state_1': 'ON'}
   SceneAction(this.deviceId, this.payload);
 
-  factory SceneAction.fromJson(Map<String, dynamic> j) => SceneAction(
-        j['device_id'],
-        {for (final e in Map<String, dynamic>.from(j['payload'] ?? {}).entries) if (e.value is String) e.key: e.value as String},
-      );
+  factory SceneAction.fromJson(Map<String, dynamic> j) => SceneAction(j['device_id'], {
+    for (final e in Map<String, dynamic>.from(j['payload'] ?? {}).entries)
+      if (e.value is String) e.key: e.value as String,
+  });
   Map<String, dynamic> toJson() => {'device_id': deviceId, 'payload': payload};
 }
 
@@ -337,6 +554,9 @@ class Scene {
   final List<int> autoDays; // 1 = thứ Hai … 7 = Chủ nhật
   final DateTime? lastRunAt;
   final String? lastStatus; // running | ok | partial | failed | missed
+  final List<String> alertDevices; // cảm biến được báo khi ngữ cảnh này đang bật
+  final bool active; // ngữ cảnh đang bật của căn hộ (chạy gần nhất)
+  final bool autoLeave; // tự chạy khi người cuối cùng rời nhà
 
   Scene({
     required this.id,
@@ -348,19 +568,27 @@ class Scene {
     required this.autoDays,
     required this.lastRunAt,
     required this.lastStatus,
+    this.alertDevices = const [],
+    this.active = false,
+    this.autoLeave = false,
   });
 
   factory Scene.fromJson(Map<String, dynamic> j) => Scene(
-        id: j['id'],
-        name: j['name'],
-        icon: j['icon'] ?? 'home',
-        actions: [for (final a in (j['actions'] as List? ?? [])) SceneAction.fromJson(Map<String, dynamic>.from(a))],
-        autoEnabled: j['auto_enabled'] == true,
-        autoTime: j['auto_time'],
-        autoDays: [for (final d in (j['auto_days'] as List? ?? [1, 2, 3, 4, 5, 6, 7])) (d as num).toInt()],
-        lastRunAt: j['last_run_at'] == null ? null : DateTime.parse(j['last_run_at']).toLocal(),
-        lastStatus: j['last_status'],
-      );
+    id: j['id'],
+    name: j['name'],
+    icon: j['icon'] ?? 'home',
+    actions: [for (final a in (j['actions'] as List? ?? [])) SceneAction.fromJson(Map<String, dynamic>.from(a))],
+    autoEnabled: j['auto_enabled'] == true,
+    autoTime: j['auto_time'],
+    autoDays: [
+      for (final d in (j['auto_days'] as List? ?? [1, 2, 3, 4, 5, 6, 7])) (d as num).toInt(),
+    ],
+    lastRunAt: j['last_run_at'] == null ? null : DateTime.parse(j['last_run_at']).toLocal(),
+    lastStatus: j['last_status'],
+    alertDevices: [for (final d in (j['alert_devices'] as List? ?? [])) d as String],
+    active: j['active'] == true,
+    autoLeave: j['auto_leave'] == true,
+  );
 
   SceneKind get kind => SceneKind.parse(icon);
 
@@ -373,4 +601,21 @@ class Scene {
     const n = ['', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
     return d.map((x) => n[x]).join(', ');
   }
+}
+
+/// Một thông báo trong lịch sử của căn hộ (cảm biến hiện diện / cửa được kích hoạt).
+class AppNotification {
+  final int id;
+  final String kind; // presence | door_open
+  final String title;
+  final String body;
+  final DateTime createdAt;
+  AppNotification({required this.id, required this.kind, required this.title, required this.body, required this.createdAt});
+  factory AppNotification.fromJson(Map<String, dynamic> j) => AppNotification(
+    id: (j['id'] as num).toInt(),
+    kind: j['kind'] ?? '',
+    title: j['title'] ?? '',
+    body: j['body'] ?? '',
+    createdAt: DateTime.parse(j['created_at']).toLocal(),
+  );
 }

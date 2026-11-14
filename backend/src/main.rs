@@ -1,10 +1,13 @@
 mod access;
+mod alerts;
 mod automation;
 mod auth;
 mod client_ws;
 mod error;
 mod gateway_ws;
 mod hub;
+mod presence;
+mod push;
 mod ratelimit;
 mod routes;
 
@@ -23,6 +26,10 @@ pub struct AppState {
     pub ip_header: Option<axum::http::HeaderName>,
     /// Băm giả để đồng đều thời gian phản hồi đăng nhập khi email không tồn tại.
     pub dummy_hash: Arc<String>,
+    /// Thông báo đẩy FCM; None nếu chưa cấu hình FCM_SERVICE_ACCOUNT_FILE.
+    pub push: Arc<Option<push::Fcm>>,
+    /// Lần báo gần nhất theo (thiết bị, loại sự kiện) để giới hạn tần suất cảnh báo.
+    pub alert_seen: Arc<dashmap::DashMap<(uuid::Uuid, alerts::Event), std::time::Instant>>,
 }
 
 #[tokio::main]
@@ -55,7 +62,12 @@ async fn main() -> anyhow::Result<()> {
         limiter: Arc::new(ratelimit::Limiter::default()),
         ip_header,
         dummy_hash: Arc::new(auth::dummy_hash().await),
+        push: Arc::new(push::Fcm::from_env()),
+        alert_seen: Arc::new(dashmap::DashMap::new()),
     };
+    if state.push.is_none() {
+        tracing::info!("push: FCM chưa cấu hình (đặt FCM_SERVICE_ACCOUNT_FILE để bật); cảnh báo vẫn lưu và đẩy realtime tới app đang mở");
+    }
 
     // Dọn nền: bộ đếm giới hạn tốc độ (5 phút) và refresh token hết hạn (1 giờ).
     {
@@ -68,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
                 st.limiter.gc();
                 if n % 12 == 0 {
                     auth::purge_expired(&st).await;
+                    alerts::purge_old(&st).await;
                 }
                 n = n.wrapping_add(1);
             }

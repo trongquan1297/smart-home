@@ -39,6 +39,22 @@ Gateway trên Pi dùng `CLOUD_WS_URL=wss://api.<domain>/gw/ws` → đi qua Cloud
 
 **Scale-out**: `Hub` hiện nằm trong RAM một tiến trình. Chạy ≥2 instance backend thì gateway và app của cùng một home có thể rơi vào instance khác nhau → cần pub/sub chung (Postgres `LISTEN/NOTIFY` là cách ít thành phần nhất; hoặc Redis/DO). Với 1 instance hoặc sticky routing theo home thì không cần.
 
+## 4c. Khách thuê (vai trò `renter`)
+
+Thứ tự vai trò: guest < **renter** < member < admin < owner. `home_members` có thêm `valid_from`, `valid_until`, `duration_hours` (migration 0006, ràng buộc CHECK: chỉ `renter` mới có cửa sổ). `access::home_role` coi khách thuê ngoài `[valid_from, valid_until)` như không có quyền (404), nên mọi endpoint tự động chặn đúng lúc, không cần job dọn nền. Thời gian tính bằng đồng hồ của Postgres.
+
+- Cửa sổ bắt đầu khi khách chấp nhận lời mời (hoặc `starts_at` nếu còn ở tương lai). "Cấp quyền ngay" đặt lại cửa sổ từ bây giờ với đủ `duration_hours`; "Gia hạn" cộng nối tiếp (hết hạn thì tính từ bây giờ).
+- Hạn chế quyền nằm ở backend (không chỉ ẩn nút trong app): `command` yêu cầu tối thiểu `renter` và từ chối khoá không bắt đầu bằng `state`; chạy ngữ cảnh cần `member`; danh sách thành viên trả 403 cho khách thuê.
+- Cắt realtime: mỗi phiên WebSocket của app kiểm tra lại quyền mỗi 10 giây, và ngay khi nhận tín hiệu nội bộ `access_check` (backend phát lên kênh của căn hộ sau khi mời/thu hồi/cấp/gia hạn). Mất quyền thì gửi `{"type":"access_revoked"}` rồi đóng.
+- Chờ check-in: `GET /v1/homes` vẫn trả căn hộ cho khách thuê chưa tới giờ (`access_status = "scheduled"`, `access_from`, `access_until`, `address = null`) để app hiện đếm ngược; hết hạn thì ẩn. Mọi endpoint dữ liệu vẫn qua `access::home_role` nên trả 404 cho tới đúng giờ. App coi máy chủ là nguồn sự thật: khi đồng hồ máy về 0 mà máy chủ chưa báo `active` thì thử lại mỗi 5 giây.
+- Giới hạn: lệnh khách thuê vẫn ghi vào `command_log` (có `user_id`), nhưng chưa có màn hình xem nhật ký; thu hồi = xoá dòng thành viên, không lưu lịch sử khách; một người một cửa sổ trên mỗi căn hộ (mời lại sẽ đặt lại cửa sổ).
+
+## 4a. Đa hãng: phân loại theo `exposes`
+
+`kind_of` (backend/src/gateway_ws.rs) phân loại thiết bị theo cấu trúc exposes của Zigbee2MQTT: `light`, `switch`, `cover`, `sensor`, `other`; không có logic riêng theo hãng, nên thêm hãng mới không cần sửa backend. Whitelist lệnh gồm `state*` (ON/OFF/TOGGLE/OPEN/CLOSE/STOP), `brightness*`, `color_temp*`, `position` (0–100). App đọc thêm đơn vị của từng thuộc tính từ exposes (vd `voltage` đơn vị mV là điện áp pin nên bị bỏ qua, chỉ hiện khi đơn vị là V).
+
+Lỗi thật tìm ra khi thử nhiều thiết bị: gateway dùng giới hạn gói MQTT mặc định của rumqttc (10 KB) trong khi bản tin retained `bridge/devices` lớn dần theo số thiết bị (mỗi thiết bị mang cả cây exposes; 10 mẫu đã ~17 KB). Vượt ngưỡng thì gateway bị ngắt và kết nối lại vô hạn, không bao giờ đồng bộ. Đã nâng giới hạn lên 4 MiB (`MQTT_MAX_PACKET`). Gateway còn đọc `MQTT_CLIENT_ID` (mặc định `smart-gateway`) vì hai gateway dùng chung broker với cùng client id sẽ đá nhau.
+
 ## 4b. Ngữ cảnh và tự kích hoạt
 
 Bảng `scenes` (migration 0005): `actions` jsonb `[{device_id, payload}]` (không có FK tới `devices`: thiết bị bị xoá thì hành động đó bị bỏ qua khi chạy), cộng cột tự kích hoạt `auto_enabled/auto_time/auto_days` và `last_run_at/last_status`. Bộ chạy (`backend/src/automation.rs`) là một task nền trong tiến trình backend, **không** nằm trên Pi, nên cần backend và gateway cùng online lúc đến giờ.
@@ -47,6 +63,23 @@ Bảng `scenes` (migration 0005): `actions` jsonb `[{device_id, payload}]` (khô
 - Chống chạy đôi: `UPDATE … WHERE last_run_at < <thời điểm định>` trả về đúng 1 dòng mới được chạy, nên an toàn khi có nhiều bản backend. Tạo/sửa giờ đặt `last_run_at = now()` để không chạy bù lần đã qua trong ngày.
 - Gateway offline: thử lại ở các tick sau trong 5 phút (`GRACE_SECS`), quá hạn ghi `missed`. Chọn bỏ lỡ thay vì chạy bù vì bật/tắt thiết bị trễ nhiều giờ có thể gây hại hơn là bỏ qua.
 - Giới hạn đã biết: độ chính xác ±20 giây (chu kỳ tick); lệnh chỉ "đã gửi xuống gateway", chưa chờ thiết bị xác nhận nên `ok` nghĩa là đã gửi đủ lệnh chứ không đảm bảo thiết bị đã đổi trạng thái; ngữ cảnh chạy bằng tay và lệnh điều khiển thường dùng chung bảng `command_log`.
+
+## 4d. Cảnh báo cảm biến và thông báo đẩy
+
+Migration 0007: `scenes.alert_devices uuid[]`, `homes.active_scene_id/active_since` (FK `ON DELETE SET NULL`), `push_tokens`, `notifications`. Chạy ngữ cảnh (tay hoặc bộ lập lịch) đặt `active_scene_id`; ngữ cảnh không có cảnh báo thay thế cái cũ nên cũng là cách tắt canh.
+
+- Phát hiện (`backend/src/alerts.rs`): handler `State` của gateway cập nhật `devices.state` bằng CTE `UPDATE … RETURNING` lấy cả trạng thái cũ và mới, so sánh `occupancy` false→true / `contact` true→false (chỉ chuyển trạng thái mới tính, không phải mọi bản tin). Chỉ báo khi thiết bị nằm trong `alert_devices` của ngữ cảnh đang bật. Chống trùng 60 giây theo (thiết bị, loại) bằng DashMap trong RAM — nhiều bản backend sẽ mỗi bản một bộ đếm.
+- Phát: ghi `notifications` (giữ 30 ngày) → WebSocket `alert` (bỏ qua với vai trò dưới member) → FCM HTTP v1 (`push.rs`, JWT RS256 từ service account, tuỳ chọn qua `FCM_SERVICE_ACCOUNT_FILE`; người nhận = owner/admin/member của căn hộ + quản trị tenant). Lỗi FCM chỉ ghi log, không chặn luồng trạng thái; token bị FCM báo không còn hợp lệ (`UNREGISTERED`/404) bị xoá khỏi `push_tokens`.
+- App: `Notifier` (thông báo cục bộ khi nhận `alert` qua WS lúc app đang chạy) và `PushService` (Firebase, đăng ký token qua `POST /v1/push/tokens` sau khi người dùng cấp quyền; không xử lý tin FCM lúc foreground để khỏi báo trùng với WS). Dùng `getToken()` (đã deprecated) thay vì `register()/onRegistered` vì API mới trả về Firebase Installation ID, chưa kiểm chứng dùng được làm đích HTTP v1.
+- Còn thiếu: chưa có "giờ yên tĩnh"; trạng thái canh chỉ theo ngữ cảnh, không theo người.
+
+## 4e. Tự chuyển ngữ cảnh khi rời nhà
+
+Migration 0008: `homes.geo_lat/geo_lng/geo_radius_m`, `scenes.auto_leave` (chỉ mục duy nhất từng phần → tối đa 1 ngữ cảnh mỗi căn hộ; bật cho ngữ cảnh khác thì `claim_auto_leave` tắt cái cũ), `member_presence(home_id, user_id, inside, updated_at)`. Logic ở `backend/src/presence.rs`: `report` tính `anyone_home` trước và sau khi ghi; chỉ khi chuyển true→false mới gọi `automation::run_auto_leave` (dùng chung `execute`/`activate_scene` với bộ lập lịch). `anyone_home` chỉ đếm hàng `inside` mới hơn 7 ngày của người còn là owner/admin/member (hoặc quản trị tenant), nên thành viên bị gỡ hoặc điện thoại chết không chặn mãi.
+
+- Riêng tư: máy chủ chỉ biết vị trí căn hộ do quản trị đặt và cờ trong/ngoài của từng người; toạ độ của thành viên ở lại trên điện thoại (geofence do hệ điều hành đánh giá).
+- App (`geofence_service.dart`): `native_geofence` với callback top-level `homeGeofenceTriggered` chạy trong isolate nền, tự đọc `token`/`refresh_token` từ `flutter_secure_storage` rồi gọi `presence`. Rủi ro đã biết: nếu app đang mở và callback nền cùng làm mới token một lúc thì refresh token xoay vòng bị coi là dùng lại và thu hồi cả phiên (hiếm; chưa có khoá chéo giữa hai isolate). `AppModel.refreshGeofence` đăng ký/gỡ theo cấu hình (chỉ khi căn hộ có vị trí và có ngữ cảnh `auto_leave`) và báo ngay trạng thái hiện tại để máy chủ có mốc "trong".
+- Chưa làm: kích hoạt khi **về** nhà, nhiều vùng cho một căn hộ, thử lại khi gateway offline lúc rời nhà, thông báo "đã tự chạy ngữ cảnh X".
 
 ## 5. Bảo mật — đã làm / còn thiếu
 
@@ -148,4 +181,4 @@ Cảm biến chạy pin báo trạng thái theo sự kiện nên `online` có th
 3. Test tự động cho backend (phân quyền, validate lệnh, đồng bộ thiết bị) với Postgres thật. Hiện chỉ có test đơn vị cho giới hạn tốc độ và JWT (`cargo test`) và test luồng làm mới token của app (`flutter test`).
 4. Các mục bảo mật còn thiếu ở §5.
 5. Chọn phương án Cloudflare §4 và dựng CI/CD.
-6. Tính năng tiếp: cảnh (scene), lịch hẹn giờ, push notification, OTA gateway, giám sát tiêu thụ.
+6. Tính năng tiếp: OTA gateway, giám sát tiêu thụ.

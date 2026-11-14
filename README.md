@@ -55,6 +55,47 @@ TOKEN=$(curl -s localhost:8080/v1/auth/login -H 'content-type: application/json'
 curl -s localhost:8080/v1/homes -H "authorization: Bearer $TOKEN"
 ```
 
+## Triển khai lên máy chủ (đã làm: 10.60.1.14)
+
+Thư mục `/opt/msmart` (SSH: `ssh -J root@113.20.103.158 root@10.60.1.14`), project Docker `smarthome`, chạy cùng máy với các dịch vụ khác nên **không dùng 8080/8081/5432** (thuộc `shop-api` và Postgres 13).
+
+| Dịch vụ | Cổng | Ghi chú |
+|---|---|---|
+| Backend | **18080** (mọi giao diện) | `GET /healthz`, API `/v1/...` |
+| Simulator Zigbee2MQTT | **18081** (mọi giao diện) | giao diện web **không có xác thực** |
+| Postgres | không publish | chỉ backend trong mạng compose truy cập |
+| Mosquitto | `127.0.0.1:1883` | |
+
+Cấu hình nằm trong `.env` (chmod 600, mật khẩu ngẫu nhiên sinh trên server, không có trong repo) và `docker-compose.server.yml`. Lệnh thường dùng trên server: `docker compose ps`, `docker compose logs -f backend`, `docker compose up -d --build backend`.
+
+**Gateway chưa chạy** (cần token): đăng ký tài khoản trong app (`--dart-define=API_URL=http://<địa-chỉ-công-khai>:18080`), tạo căn hộ, vào *Bộ điều khiển trung tâm → Thêm*, dán token vào `GATEWAY_TOKEN=` trong `.env` rồi `docker compose up -d --build gateway`. Chưa tạo dữ liệu mẫu và **không** có tài khoản demo trên server.
+
+## Khách thuê: chia sẻ quyền có thời hạn
+
+Quản trị căn hộ: **Thành viên → Mời thành viên → Khách thuê**. Chọn thời gian dùng (6 giờ … 30 ngày hoặc nhập số giờ, tối đa 8760) và giờ bắt đầu (*khi khách nhập mã*, hoặc *hẹn giờ* tới 1 năm). Gửi mã mời cho khách; khách nhập mã ở màn Căn hộ như thành viên thường.
+
+- **Chỉ bật/tắt**: lệnh của khách thuê chỉ nhận `state*` (ON/OFF/TOGGLE, và OPEN/CLOSE/STOP của rèm); chỉnh độ sáng, màu, vị trí rèm bị từ chối (403). Khách xem được phòng và thiết bị, nhưng không chạy được ngữ cảnh, không xem danh sách thành viên (có email gia đình), không vào Matter/gateway/mời/sửa thiết bị.
+- **Hết giờ là hết quyền**: quyền được kiểm tra ở **mỗi** yêu cầu nên có hiệu lực tức thì ở REST; WebSocket đang mở bị cắt tối đa ~10 giây sau khi hết hạn, và **ngay lập tức** khi bị thu hồi/cấp/gia hạn. App tự thoát về danh sách và báo "Quyền truy cập … đã kết thúc".
+- **Can thiệp ngay lập tức** (chỉ quản trị): *Cấp quyền ngay* (mở sớm khi đã hẹn giờ, hoặc cấp lại đủ thời lượng khi đã hết hạn), *Gia hạn* (+1 giờ … +7 ngày), *Thu hồi ngay* (nút đỏ).
+- **Đợi check-in**: nếu quản trị hẹn giờ bắt đầu, khách đăng nhập và nhập mã sẽ thấy thẻ căn hộ **"Khách thuê · đang đợi check-in"** với đồng hồ đếm ngược từng giây và giờ check-in; hộp thoại xác nhận báo giờ vào được. Chưa tới giờ thì mọi dữ liệu căn hộ đều bị chặn (404) và **địa chỉ căn hộ bị ẩn**; tới giờ thẻ tự mở, không cần thao tác. Máy chủ quyết định trạng thái (đồng hồ điện thoại lệch chỉ làm hiển thị "Đang kích hoạt…" vài giây rồi app hỏi lại máy chủ mỗi 5 giây).
+- Khách thuê đã là thành viên chính thức thì không bị hạ quyền (409); khách thuê nhận lời mời thành viên sẽ được nâng quyền và xoá giới hạn thời gian.
+- API: `POST /v1/homes/:id/invites {role:"renter", duration_hours, starts_at?}`, `PATCH /v1/homes/:id/members/:uid {action:"grant_now"|"extend", hours?}`, `DELETE /v1/homes/:id/members/:uid` (thu hồi). Vai trò trong code là `renter` (không dùng "tenant" vì chữ đó đã là khách hàng của hệ thống).
+
+## Thiết bị nhiều hãng (Aqara, Tuya, VSmart…)
+
+Hệ thống đi qua **Zigbee2MQTT**, nên mọi thiết bị **Zigbee** mà Zigbee2MQTT hỗ trợ (danh sách ở zigbee2mqtt.io/supported-devices) ghép được bằng *Permit join* như thiết bị VSmart. Backend và app xử lý theo cấu trúc `exposes` mà thiết bị báo, không theo tên hãng:
+
+| Loại | Nhận diện | App hiển thị / điều khiển |
+|---|---|---|
+| Công tắc, ổ cắm | expose `switch` (`state`, `state_1`, `state_l1`, `state_left`/`state_right`…) | từng gang bật/tắt; nhãn "Gang trái/phải", "Gang N", "Ổ cắm" |
+| Ổ cắm đo điện | switch + `power`, `current`, `voltage` (V), `energy` | thêm ô Công suất, Dòng điện, Điện áp, Điện năng |
+| Rèm / cửa cuốn | expose `cover` (`state` OPEN/CLOSE/STOP, `position` 0–100) | nút Mở · Dừng · Đóng, thanh trượt vị trí |
+| Cảm biến | `temperature`, `humidity`, `pressure`, `illuminance`, `contact`, `occupancy`, `water_leak`, `smoke`, `vibration`, `battery` | ô số liệu; rò nước/khói/cửa mở được tô nổi bật |
+
+Đã thử trong **simulator** với các mẫu (thuộc tính lấy theo trang thiết bị trên zigbee2mqtt.io): Aqara `WSDCGQ11LM`, `RTCGQ11LM`, `SJCGQ11LM`, `MCCGQ11LM`, `QBKG03LM`, `ZNCZ12LM`; Tuya `TS0012`, `TS0201`, `TS011F_plug_1`, `TS130F`. **Chưa thử với thiết bị Aqara/Tuya thật.**
+
+Chưa hỗ trợ: **Tuya Wi‑Fi** (không phải Zigbee, cần Tuya Cloud/LocalTuya, ngoài phạm vi), thanh trượt độ sáng/màu cho đèn, điều hòa/van sưởi (`climate`), khoá, quạt, nút bấm (`action`). Thiết bị loại này vẫn ghép và hiện tên, nhưng app chưa có điều khiển riêng. Việc ánh xạ sang Matter (Google/Apple Home) cho rèm và cảm biến phụ thuộc plugin `matterbridge-zigbee2mqtt`, chưa kiểm chứng. Lưu ý riêng từ trang thiết bị: Tuya `TS0201` có firmware OTA mới được báo là làm hỏng thiết bị, không nên cập nhật.
+
 ## Ngữ cảnh và tự kích hoạt theo khung giờ
 
 Trong app: căn hộ → biểu tượng ✨ **Ngữ cảnh**. Một ngữ cảnh là nhóm thao tác Bật/Tắt theo từng gang của nhiều công tắc (vd "Đi ngủ" tắt hết đèn); bấm ▶ để chạy ngay, hoặc bật **Tự động kích hoạt** để chọn giờ và các ngày trong tuần. Giờ tính theo múi giờ của căn hộ (`homes.timezone`, mặc định Asia/Ho_Chi_Minh).
@@ -63,6 +104,20 @@ Trong app: căn hộ → biểu tượng ✨ **Ngữ cảnh**. Một ngữ cản
 - Bộ điều khiển trung tâm (Pi) offline lúc đến giờ: thử lại trong 5 phút; quá hạn thì ghi **bỏ lỡ** (hiện trên thẻ ngữ cảnh), **không chạy bù muộn**. Backend tắt đúng lúc đến giờ cũng bị coi là bỏ lỡ.
 - Chỉ nhận `ON`/`OFF` (không `TOGGLE`, để chạy lại cho cùng kết quả); payload đi qua đúng whitelist của lệnh điều khiển; lệnh tự động ghi `command_log` với `user_id` rỗng.
 - Giới hạn: 50 ngữ cảnh/căn hộ, 50 hành động/ngữ cảnh. Đây là lịch theo giờ cố định; chưa có kích hoạt theo mặt trời mọc/lặn, theo cảm biến hay theo vị trí.
+
+## Cảnh báo cảm biến và thông báo đẩy
+
+Trong màn hình tạo/sửa ngữ cảnh có mục **Cảnh báo cảm biến**: chọn cảm biến hiện diện (`occupancy`) và cảm biến cửa (`contact`) cần canh. Chạy ngữ cảnh đó (bằng tay hoặc theo giờ) thì nó thành **ngữ cảnh đang bật** của căn hộ (`homes.active_scene_id`, hiện chip "Đang bật" và dải trên màn hình căn hộ). Khi một cảm biến đã chọn chuyển trạng thái (có người: `occupancy` false→true; cửa mở: `contact` true→false), backend ghi vào bảng `notifications`, đẩy sự kiện `alert` qua WebSocket và gửi FCM tới thiết bị của chủ nhà/quản trị/thành viên. Chạy một ngữ cảnh khác (không có cảnh báo) hoặc bấm **Tắt cảnh báo** (`DELETE /v1/homes/:hid/active-scene`) là tắt canh. Khách thuê/khách xem không nhận cảnh báo. Mỗi (cảm biến, loại sự kiện) tối đa 1 thông báo/60 giây; lịch sử giữ 30 ngày (menu ⋮ → Thông báo).
+
+Bật FCM thật (app tắt hẳn vẫn nhận): (1) thêm `app/android/app/google-services.json` và `app/ios/Runner/GoogleService-Info.plist` của project Firebase — package/bundle ID phải là `com.newmoon22.msmart`; (2) Firebase Console → Project settings → Service accounts → tạo khoá JSON, lưu thành `secrets/fcm.json` (đã gitignore) và chạy backend với `FCM_SERVICE_ACCOUNT_FILE=/run/secrets/fcm.json`; (3) iOS: tải APNs Authentication Key (.p8) lên Firebase → Cloud Messaging, bật capability Push Notifications cho App ID, chạy trên máy thật. Không có biến này, cảnh báo vẫn tới app đang chạy qua WebSocket (thông báo cục bộ).
+
+## Tự chuyển ngữ cảnh khi rời nhà
+
+Trong form ngữ cảnh có tuỳ chọn **Tự chuyển khi rời nhà** (quản trị): bấm "Dùng vị trí hiện tại" khi đang ở nhà để đặt vị trí căn hộ (`PUT /v1/homes/:id/location`, bán kính 100/150/300/500 m, mặc định 150), rồi bật tuỳ chọn. Mỗi căn hộ chỉ một ngữ cảnh dùng được tuỳ chọn này. Điện thoại của từng thành viên (chủ nhà/quản trị/thành viên) đăng ký geofence của hệ điều hành quanh vị trí đó (`native_geofence`: CLCircularRegion trên iOS, GeofencingClient trên Android; chạy cả khi app đã tắt) và chỉ báo **trong/ngoài** lên `PUT /v1/homes/:id/presence` — máy chủ không nhận toạ độ cá nhân. Khi trạng thái chung chuyển từ "còn người ở nhà" sang "không còn ai", máy chủ chạy ngữ cảnh đó (thành ngữ cảnh đang bật, ghi `command_log` với `user_id` rỗng).
+
+- Quy tắc "người cuối cùng": chỉ tính thành viên đã báo trạng thái trong 7 ngày gần nhất và còn quyền; báo "ngoài" khi chưa ai từng báo "trong" thì không chạy gì; báo lặp lại không chạy lại; đổi hoặc xoá vị trí thì xoá trạng thái cũ.
+- Cần quyền vị trí **"Luôn luôn"**: app xin khi lưu ngữ cảnh, và hiện dải nhắc trên màn hình căn hộ nếu thành viên khác chưa cấp. Đăng xuất sẽ gỡ geofence của máy.
+- Giới hạn: gateway offline lúc rời nhà thì ngữ cảnh không chạy (ghi `failed`, không chạy bù); điện thoại hết pin/tắt định vị/không cấp quyền thì không báo được; callback nền dùng refresh token đã lưu, hiếm khi trùng với app đang mở có thể làm phiên bị thu hồi (xem §5 ARCHITECTURE).
 
 ## Chạy với Zigbee2MQTT thật trên Pi 3
 
@@ -85,6 +140,7 @@ Flutter app ── backend (cloud) ◀── gateway agent ┘   (lấy mã QR, 
 
 - Matter điều khiển **trong mạng LAN nhà**, nên bridge chạy trên Pi (`infra/matterbridge`, dựa trên [Matterbridge](https://github.com/Luligu/matterbridge) + plugin `matterbridge-zigbee2mqtt`), không chạy trên cloud.
 - Trong app: vào căn hộ → biểu tượng **QR** (chỉ admin/owner) → quét mã bằng Home app (Apple Home: *+ → Thêm phụ kiện*; Google Home: *+ → Thiết lập thiết bị → thiết bị tương thích Matter*).
+- **Google Home cần một thiết bị trung tâm Matter của Google trong nhà** (loa/màn hình Nest hoặc Google TV tương thích Matter, cùng mạng với Pi và điện thoại). Thiếu nó, Google Home báo "Bạn cần có một thiết bị trung tâm chuẩn Matter". Danh sách model được hỗ trợ lấy từ tài liệu Google Home (mình chưa kiểm chứng được danh sách này trong repo). Apple Home cần Apple TV/HomePod để điều khiển khi ra ngoài.
 - Sau khi đã ghép, mã ẩn đi; bấm **Thêm ứng dụng khác** để mở lại chế độ ghép nối (ví dụ thêm Google Home sau Apple Home). Danh sách ứng dụng đã ghép có nút **Ngắt kết nối**.
 - Thiết bị hiện trong Home app: công tắc dưới dạng **đèn** (mỗi gang một đèn; đổi sang `outlet`/`switch` bằng `MATTER_SWITCH_AS`), cảm biến cửa, cảm biến hiện diện. Thiết bị ghép mới vào Zigbee2MQTT cần `docker compose restart matterbridge` trên Pi mới xuất hiện trong Home app.
 - Bật trên Pi: `edge/docker-compose.yml` đã có service `matterbridge` (`network_mode: host`, **bắt buộc** cho mDNS). Pi và điện thoại phải cùng mạng khi ghép.
@@ -110,7 +166,9 @@ Flutter app ── backend (cloud) ◀── gateway agent ┘   (lấy mã QR, 
 | `GET/POST /v1/homes/:id/rooms`, `PATCH/DELETE /v1/rooms/:id` | phòng: tên + icon (`living` `bedroom` `kitchen` `bathroom` `dining` `office` `balcony` `garage` `kids` `laundry` `hallway` `other`) |
 | `GET /v1/homes/:id/devices`, `PATCH /v1/devices/:id` | thiết bị: đổi tên, gán phòng, đặt tên + loại tải cho từng gang (`channels`: `light` `fan` `outlet` `air_conditioner` `water_heater` `other`) |
 | `POST /v1/devices/:id/command` `{"payload":{"state_1":"TOGGLE"}}` | điều khiển → `202`; `503` nếu gateway offline |
-| `GET /v1/homes/:id/ws?token=` | realtime: `device_state`, `device_online`, `gateway`, `devices_changed` |
+| `GET /v1/homes/:id/ws?token=` | realtime: `device_state`, `device_online`, `gateway`, `devices_changed`, `scene_active`, `alert` (`alert` chỉ gửi cho thành viên trở lên) |
+| `PUT/DELETE /v1/homes/:id/location`, `PUT /v1/homes/:id/presence` | vị trí căn hộ `{lat,lng,radius_m}` (admin); điện thoại báo `{inside: bool}` (member) cho "tự chuyển khi rời nhà" |
+| `GET /v1/homes/:id/notifications`, `DELETE /v1/homes/:id/active-scene`, `POST/DELETE /v1/push/tokens` | lịch sử cảnh báo (member); tắt ngữ cảnh đang bật (member); đăng ký/gỡ token FCM của thiết bị `{token, platform: ios\|android}` |
 | `GET/POST /v1/homes/:id/members…`, `/invites`, `/gateways` | thành viên, mời, gateway |
 | `GET /v1/homes/:id/matter`, `POST …/matter/pairing` `{"open":bool}`, `DELETE …/matter/fabrics/:index` | Matter: trạng thái + mã QR (admin), mở/đóng ghép nối, ngắt một ứng dụng |
 | `POST /v1/gateways/:id/rotate`, `DELETE /v1/gateways/:id` | thu hồi token gateway (giữ thiết bị) / xoá gateway (xoá cả thiết bị của nó) |
@@ -118,5 +176,9 @@ Flutter app ── backend (cloud) ◀── gateway agent ┘   (lấy mã QR, 
 Lệnh chỉ chấp nhận thuộc tính `state*` (ON/OFF/TOGGLE), `brightness*`, `color_temp*`; mọi payload khác bị từ chối để client không thể gọi các topic quản trị của Zigbee2MQTT.
 
 ## Đã kiểm chứng / chưa kiểm chứng
+
+"Tự chuyển khi rời nhà": API đã kiểm thử đầu-cuối trên Docker (2 thành viên, người cuối rời mới chạy, báo lặp, quyền, xoá vị trí) và form + xin quyền + đặt vị trí trên iOS Simulator; app build được trên iOS Simulator và Android (APK debug). **Chưa kiểm chứng**: geofence thật (vào/ra vùng), callback nền khi app tắt, quyền "Luôn luôn" trên Android, trên máy thật.
+
+Cảnh báo cảm biến: đã kiểm thử đầu-cuối trên Docker cục bộ (chuyển trạng thái → thông báo trong DB + WebSocket, chống trùng 60 giây, lọc theo vai trò) và giao diện trên iOS Simulator (tạo ngữ cảnh có cảnh báo, hộp thoại quyền, chạy ngữ cảnh). **Chưa kiểm chứng**: gửi FCM thật (backend chưa có khoá service account; `push.rs` mới chỉ có test đơn vị cho thân tin), nhận đẩy trên iOS/Android thật khi app bị tắt, chạy app trên Android (mới build APK debug thành công). Đổi ID app sang `com.newmoon22.msmart` nên bản cài cũ (`vn.smarthome.smartHome`) là app khác.
 
 Đã chạy thật trong Docker: build 3 image, migration, đồng bộ thiết bị từ simulator, bật/tắt qua Pi (gateway→MQTT→simulator→trạng thái về), 400 với payload sai, 404 với người ngoài, 403 khi guest điều khiển, mã mời dùng 1 lần, WebSocket realtime, 503 khi gateway offline. App Flutter: `flutter analyze` sạch, đã chạy trên iOS Simulator (đăng nhập, xem căn hộ, đăng xuất; chưa thử Android và thiết bị thật). Bảo mật: Mosquitto bắt buộc đăng nhập + ACL, giới hạn đăng nhập/đăng ký, refresh token xoay vòng (kiểm thử API và WebSocket hết hạn, xem `docs/ARCHITECTURE.md` §5). Thuộc tính thiết bị đã đối chiếu với tài liệu Zigbee2MQTT nhưng chưa thử với dongle và thiết bị VSmart thật, chưa deploy lên Cloudflare, test tự động mới có ở mức đơn vị (`cd backend && cargo test`, `cd app && flutter test --dart-define=API_URL=http://127.0.0.1:18080 test/api_refresh_test.dart`) — xem `docs/ARCHITECTURE.md` mục "Việc còn lại".

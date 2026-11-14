@@ -131,8 +131,7 @@ class Api {
   }
 
   // auth
-  Future<Map<String, dynamic>> login(String email, String password) async =>
-      await _send('POST', '/v1/auth/login', {'email': email, 'password': password});
+  Future<Map<String, dynamic>> login(String email, String password) async => await _send('POST', '/v1/auth/login', {'email': email, 'password': password});
   Future<Map<String, dynamic>> register(String email, String password, String name) async =>
       await _send('POST', '/v1/auth/register', {'email': email, 'password': password, 'name': name});
   Future<Map<String, dynamic>> me() async => await _send('GET', '/v1/me');
@@ -143,61 +142,70 @@ class Api {
   Future<void> createScene(String homeId, Map<String, dynamic> body) => _send('POST', '/v1/homes/$homeId/scenes', body);
   Future<void> updateScene(String id, Map<String, dynamic> body) => _send('PATCH', '/v1/scenes/$id', body);
   Future<void> deleteScene(String id) => _send('DELETE', '/v1/scenes/$id');
+
   /// Trả về {status, sent, total}.
   Future<Map<String, dynamic>> runScene(String id) async => Map<String, dynamic>.from(await _send('POST', '/v1/scenes/$id/run'));
 
+  /// Tắt chế độ đang bật (ngừng cảnh báo cảm biến theo ngữ cảnh).
+  Future<void> deactivateScene(String homeId) => _send('DELETE', '/v1/homes/$homeId/active-scene');
+  Future<List<AppNotification>> notifications(String homeId) async =>
+      ((await _send('GET', '/v1/homes/$homeId/notifications')) as List).map((e) => AppNotification.fromJson(Map<String, dynamic>.from(e))).toList();
+
+  Future<void> registerPushToken(String token, String platform) => _send('POST', '/v1/push/tokens', {'token': token, 'platform': platform});
+  Future<void> deletePushToken(String token) => _send('DELETE', '/v1/push/tokens', {'token': token});
+
+  Future<void> setHomeLocation(String homeId, double lat, double lng, int radius) =>
+      _send('PUT', '/v1/homes/$homeId/location', {'lat': lat, 'lng': lng, 'radius_m': radius});
+  Future<void> clearHomeLocation(String homeId) => _send('DELETE', '/v1/homes/$homeId/location');
+  Future<void> reportPresence(String homeId, bool inside) => _send('PUT', '/v1/homes/$homeId/presence', {'inside': inside});
+
   // tenant / home
   Future<void> createTenant(String name) => _send('POST', '/v1/tenants', {'name': name});
-  Future<void> createHome(String tenantId, String name) =>
-      _send('POST', '/v1/tenants/$tenantId/homes', {'name': name});
-  Future<List<Home>> homes() async =>
-      ((await _send('GET', '/v1/homes')) as List).map((e) => Home.fromJson(e)).toList();
+  Future<void> createHome(String tenantId, String name) => _send('POST', '/v1/tenants/$tenantId/homes', {'name': name});
+  Future<List<Home>> homes() async => ((await _send('GET', '/v1/homes')) as List).map((e) => Home.fromJson(e)).toList();
 
   // rooms / devices
-  Future<List<Room>> rooms(String homeId) async =>
-      ((await _send('GET', '/v1/homes/$homeId/rooms')) as List).map((e) => Room.fromJson(e)).toList();
-  Future<void> createRoom(String homeId, String name, {String? icon}) =>
-      _send('POST', '/v1/homes/$homeId/rooms', {'name': name, 'icon': ?icon});
-  Future<void> updateRoom(String roomId, {String? name, String? icon}) =>
-      _send('PATCH', '/v1/rooms/$roomId', {'name': ?name, 'icon': ?icon});
+  Future<List<Room>> rooms(String homeId) async => ((await _send('GET', '/v1/homes/$homeId/rooms')) as List).map((e) => Room.fromJson(e)).toList();
+  Future<void> createRoom(String homeId, String name, {String? icon}) => _send('POST', '/v1/homes/$homeId/rooms', {'name': name, 'icon': ?icon});
+  Future<void> updateRoom(String roomId, {String? name, String? icon}) => _send('PATCH', '/v1/rooms/$roomId', {'name': ?name, 'icon': ?icon});
   Future<void> deleteRoom(String roomId) => _send('DELETE', '/v1/rooms/$roomId');
-  Future<List<Device>> devices(String homeId) async =>
-      ((await _send('GET', '/v1/homes/$homeId/devices')) as List).map((e) => Device.fromJson(e)).toList();
-  Future<void> updateDevice(String id,
-          {String? name, String? roomId, bool clearRoom = false, Map<String, Channel>? channels}) =>
-      _send('PATCH', '/v1/devices/$id', {
-        'name': ?name,
-        'room_id': ?roomId,
-        if (clearRoom) 'clear_room': true,
-        if (channels != null) 'channels': channels.map((k, v) => MapEntry(k, v.toJson())),
-      });
-  Future<void> command(String deviceId, Map<String, dynamic> payload) =>
-      _send('POST', '/v1/devices/$deviceId/command', {'payload': payload});
+  Future<List<Device>> devices(String homeId) async => ((await _send('GET', '/v1/homes/$homeId/devices')) as List).map((e) => Device.fromJson(e)).toList();
+  Future<void> updateDevice(String id, {String? name, String? roomId, bool clearRoom = false, Map<String, Channel>? channels}) => _send(
+    'PATCH',
+    '/v1/devices/$id',
+    {'name': ?name, 'room_id': ?roomId, if (clearRoom) 'clear_room': true, if (channels != null) 'channels': channels.map((k, v) => MapEntry(k, v.toJson()))},
+  );
+  Future<void> command(String deviceId, Map<String, dynamic> payload) => _send('POST', '/v1/devices/$deviceId/command', {'payload': payload});
 
   // Matter bridge (Google Home / Apple Home). Chỉ admin/owner; phản hồi chứa mã ghép nối nên không lưu cache.
-  Future<MatterInfo> matterInfo(String homeId) async =>
-      MatterInfo.fromJson(Map<String, dynamic>.from(await _send('GET', '/v1/homes/$homeId/matter')));
+  Future<MatterInfo> matterInfo(String homeId) async => MatterInfo.fromJson(Map<String, dynamic>.from(await _send('GET', '/v1/homes/$homeId/matter')));
   Future<MatterInfo> matterPairing(String homeId, bool open) async =>
       MatterInfo.fromJson(Map<String, dynamic>.from(await _send('POST', '/v1/homes/$homeId/matter/pairing', {'open': open})));
   Future<MatterInfo> matterRemoveFabric(String homeId, int index) async =>
       MatterInfo.fromJson(Map<String, dynamic>.from(await _send('DELETE', '/v1/homes/$homeId/matter/fabrics/$index')));
 
   // members
-  Future<List<Member>> members(String homeId) async =>
-      ((await _send('GET', '/v1/homes/$homeId/members')) as List).map((e) => Member.fromJson(e)).toList();
+  Future<List<Member>> members(String homeId) async => ((await _send('GET', '/v1/homes/$homeId/members')) as List).map((e) => Member.fromJson(e)).toList();
   Future<void> removeMember(String homeId, String userId) => _send('DELETE', '/v1/homes/$homeId/members/$userId');
-  Future<String> invite(String homeId, String role) async =>
-      (await _send('POST', '/v1/homes/$homeId/invites', {'role': role}))['token'];
-  Future<void> acceptInvite(String token) => _send('POST', '/v1/invites/accept', {'token': token});
+  Future<String> invite(String homeId, String role, {int? durationHours, DateTime? startsAt}) async => (await _send('POST', '/v1/homes/$homeId/invites', {
+    'role': role,
+    'duration_hours': ?durationHours,
+    if (startsAt != null) 'starts_at': startsAt.toUtc().toIso8601String(),
+  }))['token'];
+
+  /// Can thiệp quyền khách thuê: 'grant_now' (cấp ngay) hoặc 'extend' (gia hạn `hours` giờ).
+  Future<void> memberAction(String homeId, String userId, String action, {int? hours}) =>
+      _send('PATCH', '/v1/homes/$homeId/members/$userId', {'action': action, 'hours': ?hours});
+
+  /// Trả về {home_id, role, valid_from, valid_until} (hai trường sau chỉ có với khách thuê).
+  Future<Map<String, dynamic>> acceptInvite(String token) async => Map<String, dynamic>.from(await _send('POST', '/v1/invites/accept', {'token': token}));
   Future<Map<String, dynamic>> gateways(String homeId) async => await _send('GET', '/v1/homes/$homeId/gateways');
 
   /// Trả về token của gateway — chỉ hiển thị MỘT lần.
-  Future<String> createGateway(String homeId, String name) async =>
-      (await _send('POST', '/v1/homes/$homeId/gateways', {'name': name}))['token'];
+  Future<String> createGateway(String homeId, String name) async => (await _send('POST', '/v1/homes/$homeId/gateways', {'name': name}))['token'];
 
   /// Thu hồi token cũ, cấp token mới (hiển thị một lần). Thiết bị/phòng được giữ nguyên.
-  Future<String> rotateGateway(String gatewayId) async =>
-      (await _send('POST', '/v1/gateways/$gatewayId/rotate'))['token'];
+  Future<String> rotateGateway(String gatewayId) async => (await _send('POST', '/v1/gateways/$gatewayId/rotate'))['token'];
 
   /// Xoá gateway; các thiết bị của nó bị xoá theo.
   Future<void> deleteGateway(String gatewayId) => _send('DELETE', '/v1/gateways/$gatewayId');

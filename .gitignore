@@ -1,2 +1,6 @@
 .env
 .DS_Store
+
+# Khoá service account Firebase (FCM) — không đưa vào git
+secrets/*
+!secrets/.gitkeep

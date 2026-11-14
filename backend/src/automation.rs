@@ -137,9 +137,16 @@ pub struct SceneOut {
     auto_days: Vec<i16>,
     last_run_at: Option<DateTime<Utc>>,
     last_status: Option<String>,
+    /// Cảm biến (hiện diện / cửa) được báo khi ngữ cảnh này đang bật.
+    alert_devices: Vec<Uuid>,
+    /// Tự chạy khi người cuối cùng rời nhà (cần căn hộ đã đặt vị trí).
+    auto_leave: bool,
+    /// Ngữ cảnh đang bật của căn hộ (chạy gần nhất); chỉ ngữ cảnh đang bật mới sinh cảnh báo.
+    active: bool,
 }
 
-const SCENE_COLS: &str = "id, home_id, name, icon, actions, auto_enabled, to_char(auto_time, 'HH24:MI') AS auto_time, auto_days, last_run_at, last_status";
+const SCENE_COLS: &str = "id, home_id, name, icon, actions, auto_enabled, to_char(auto_time, 'HH24:MI') AS auto_time, auto_days, last_run_at, last_status, alert_devices, auto_leave,
+    EXISTS(SELECT 1 FROM homes h WHERE h.active_scene_id = scenes.id) AS active";
 
 pub async fn list_scenes(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(hid): Path<Uuid>) -> ApiResult<Json<Vec<SceneOut>>> {
     access::require(&st.db, uid, hid, Role::Guest).await?;
@@ -155,6 +162,42 @@ pub struct SceneReq {
     /// "HH:MM"
     auto_time: Option<String>,
     auto_days: Option<Vec<i16>>,
+    /// Danh sách cảm biến hiện diện / cửa cần báo (thay thế toàn bộ danh sách cũ).
+    alert_devices: Option<Vec<Uuid>>,
+    /// Chạy khi người cuối cùng rời nhà; chỉ một ngữ cảnh mỗi căn hộ (bật cho ngữ cảnh này thì tắt ở ngữ cảnh khác).
+    auto_leave: Option<bool>,
+}
+
+/// Mỗi cảm biến được chọn phải thuộc căn hộ và có thuộc tính `occupancy` hoặc `contact` (nhìn từ exposes).
+async fn validate_alert_devices(st: &AppState, hid: Uuid, ids: &[Uuid]) -> ApiResult<Vec<Uuid>> {
+    let mut v = ids.to_vec();
+    v.sort();
+    v.dedup();
+    if v.len() > 20 {
+        return Err(ApiError::BadRequest("at most 20 alert sensors per scene".into()));
+    }
+    let ok: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM devices WHERE home_id = $1 AND id = ANY($2)
+            AND jsonb_path_exists(exposes, '$.** ? (@.property == \"occupancy\" || @.property == \"contact\")')",
+    )
+    .bind(hid)
+    .bind(&v)
+    .fetch_one(&st.db)
+    .await?;
+    if ok as usize != v.len() {
+        return Err(ApiError::BadRequest("alert_devices must be presence or door sensors of this home".into()));
+    }
+    Ok(v)
+}
+
+/// Bật `auto_leave` cần căn hộ đã có vị trí; chỉ giữ một ngữ cảnh `auto_leave` mỗi căn hộ.
+async fn claim_auto_leave(st: &AppState, hid: Uuid, keep: Option<Uuid>) -> ApiResult<()> {
+    let has: bool = sqlx::query_scalar("SELECT geo_lat IS NOT NULL AND geo_lng IS NOT NULL FROM homes WHERE id = $1").bind(hid).fetch_one(&st.db).await?;
+    if !has {
+        return Err(ApiError::BadRequest("home location is not set".into()));
+    }
+    sqlx::query("UPDATE scenes SET auto_leave = false WHERE home_id = $1 AND auto_leave AND id IS DISTINCT FROM $2").bind(hid).bind(keep).execute(&st.db).await?;
+    Ok(())
 }
 
 fn icon_of(i: &str) -> ApiResult<String> {
@@ -186,14 +229,19 @@ pub async fn create_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, P
     if enabled && time.is_none() {
         return Err(ApiError::BadRequest("auto_time is required when auto_enabled".into()));
     }
+    let alerts = validate_alert_devices(&st, hid, b.alert_devices.as_deref().unwrap_or(&[])).await?;
+    let leave = b.auto_leave.unwrap_or(false);
+    if leave {
+        claim_auto_leave(&st, hid, None).await?;
+    }
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM scenes WHERE home_id = $1").bind(hid).fetch_one(&st.db).await?;
     if n >= MAX_PER_HOME {
         return Err(ApiError::BadRequest(format!("at most {MAX_PER_HOME} scenes per home")));
     }
     // last_run_at = now(): tạo lúc 10:02 cho khung 10:00 thì không chạy "bù" lần đã qua.
     let s = sqlx::query_as(&format!(
-        "INSERT INTO scenes (home_id, name, icon, actions, auto_enabled, auto_time, auto_days, last_run_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7, now()) RETURNING {SCENE_COLS}"
+        "INSERT INTO scenes (home_id, name, icon, actions, auto_enabled, auto_time, auto_days, last_run_at, alert_devices, auto_leave)
+         VALUES ($1,$2,$3,$4,$5,$6,$7, now(), $8, $9) RETURNING {SCENE_COLS}"
     ))
     .bind(hid)
     .bind(name)
@@ -202,6 +250,8 @@ pub async fn create_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, P
     .bind(enabled)
     .bind(time)
     .bind(days)
+    .bind(&alerts)
+    .bind(leave)
     .fetch_one(&st.db)
     .await?;
     Ok((StatusCode::CREATED, Json(s)))
@@ -222,6 +272,13 @@ pub async fn update_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, P
     };
     let time = b.auto_time.as_deref().map(time_of).transpose()?;
     let days = b.auto_days.as_deref().map(days_of).transpose()?;
+    let alerts = match &b.alert_devices {
+        Some(ids) => Some(validate_alert_devices(&st, hid, ids).await?),
+        None => None,
+    };
+    if b.auto_leave == Some(true) {
+        claim_auto_leave(&st, hid, Some(sid)).await?;
+    }
     // Bật tự động thì phải có giờ (đã lưu từ trước hoặc gửi kèm).
     let (cur_enabled, cur_time): (bool, Option<NaiveTime>) = sqlx::query_as("SELECT auto_enabled, auto_time FROM scenes WHERE id = $1").bind(sid).fetch_one(&st.db).await?;
     if b.auto_enabled.unwrap_or(cur_enabled) && time.or(cur_time).is_none() {
@@ -234,7 +291,9 @@ pub async fn update_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, P
             "UPDATE scenes SET name = COALESCE($2, name), icon = COALESCE($3, icon), actions = COALESCE($4, actions),
                auto_enabled = COALESCE($5, auto_enabled), auto_time = COALESCE($6, auto_time), auto_days = COALESCE($7, auto_days),
                last_run_at = CASE WHEN $8 THEN now() ELSE last_run_at END,
-               last_status = CASE WHEN $8 THEN NULL ELSE last_status END
+               last_status = CASE WHEN $8 THEN NULL ELSE last_status END,
+               alert_devices = COALESCE($9, alert_devices),
+               auto_leave = COALESCE($10, auto_leave)
              WHERE id = $1 RETURNING {SCENE_COLS}"
         ))
         .bind(sid)
@@ -245,6 +304,8 @@ pub async fn update_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, P
         .bind(time)
         .bind(days)
         .bind(reschedule)
+        .bind(alerts)
+        .bind(b.auto_leave)
         .fetch_one(&st.db)
         .await?,
     ))
@@ -265,7 +326,40 @@ pub async fn run_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, Path
     if o.sent == 0 {
         return Err(ApiError::Unavailable("gateway offline or devices missing".into()));
     }
+    activate_scene(&st, hid, sid).await;
     Ok(Json(json!({ "status": status_of(&o), "sent": o.sent, "total": o.total })))
+}
+
+/// Ngữ cảnh vừa chạy (bằng tay hoặc theo giờ) trở thành ngữ cảnh "đang bật" của căn hộ. Ngữ cảnh không có cảnh báo
+/// cũng thay thế ngữ cảnh trước đó, nên chạy "Về nhà" là tắt cảnh báo của "Đi vắng".
+async fn activate_scene(st: &AppState, hid: Uuid, sid: Uuid) {
+    match sqlx::query("UPDATE homes SET active_scene_id = $2, active_since = now() WHERE id = $1").bind(hid).bind(sid).execute(&st.db).await {
+        Ok(_) => st.hub.publish(hid, json!({"type": "scene_active", "scene_id": sid}).to_string()),
+        Err(e) => tracing::warn!(%hid, "activate scene: {e}"),
+    }
+}
+
+/// Không còn ai ở nhà: chạy ngữ cảnh `auto_leave` của căn hộ (nếu có). Gateway offline thì ngữ cảnh không chạy (ghi `failed`):
+/// rời nhà là sự kiện một lần, không thử lại sau đó.
+pub async fn run_auto_leave(st: &AppState, hid: Uuid) {
+    let row: Option<(Uuid, Value)> = sqlx::query_as("SELECT id, actions FROM scenes WHERE home_id = $1 AND auto_leave").bind(hid).fetch_optional(&st.db).await.unwrap_or(None);
+    let Some((sid, actions)) = row else { return };
+    let _ = sqlx::query("UPDATE scenes SET last_run_at = now(), last_status = 'running' WHERE id = $1").bind(sid).execute(&st.db).await;
+    let outcome = execute(st, hid, &actions, None).await.unwrap_or_default();
+    let status = status_of(&outcome);
+    tracing::info!(scene = %sid, sent = outcome.sent, total = outcome.total, status, "scene auto-ran on leave");
+    if outcome.sent > 0 {
+        activate_scene(st, hid, sid).await;
+    }
+    let _ = sqlx::query("UPDATE scenes SET last_status = $2 WHERE id = $1").bind(sid).bind(status).execute(&st.db).await;
+}
+
+/// Tắt chế độ đang bật (ngừng mọi cảnh báo cảm biến theo ngữ cảnh). Thành viên trở lên.
+pub async fn deactivate_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(hid): Path<Uuid>) -> ApiResult<StatusCode> {
+    access::require(&st.db, uid, hid, Role::Member).await?;
+    sqlx::query("UPDATE homes SET active_scene_id = NULL, active_since = NULL WHERE id = $1").bind(hid).execute(&st.db).await?;
+    st.hub.publish(hid, json!({"type": "scene_active", "scene_id": null}).to_string());
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ───────────────────────── bộ chạy tự động ─────────────────────────
@@ -349,6 +443,9 @@ async fn run_due(st: &AppState) -> ApiResult<()> {
         let outcome = execute(st, r.home_id, &r.actions, None).await.unwrap_or_default();
         let status = status_of(&outcome);
         tracing::info!(scene = %r.id, sent = outcome.sent, total = outcome.total, status, "scene auto-ran");
+        if outcome.sent > 0 {
+            activate_scene(st, r.home_id, r.id).await;
+        }
         sqlx::query("UPDATE scenes SET last_status = $2 WHERE id = $1").bind(r.id).bind(status).execute(&st.db).await?;
     }
     Ok(())

@@ -1,8 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../app_model.dart';
 import '../models.dart';
+import '../geofence_service.dart';
+import '../notifier.dart';
+import '../push_service.dart';
 
 String _hhmm(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
@@ -76,42 +81,55 @@ class _ScenesScreenState extends State<ScenesScreen> {
           : null,
       body: RefreshIndicator(
         onRefresh: _load,
-        child: ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 120), children: [
-          if (_error != null)
-            Card(
-              color: cs.errorContainer,
-              child: ListTile(leading: Icon(Icons.error_outline, color: cs.onErrorContainer), title: Text(_error!, style: TextStyle(color: cs.onErrorContainer)), trailing: TextButton(onPressed: _load, child: const Text('Thử lại'))),
-            ),
-          if (scenes == null && _error == null) const Padding(padding: EdgeInsets.only(top: 80), child: Center(child: CircularProgressIndicator())),
-          if (scenes != null && scenes.isEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 64, 24, 0),
-              child: Column(children: [
-                Icon(Icons.auto_awesome_rounded, size: 56, color: cs.primary.withValues(alpha: .6)),
-                const SizedBox(height: 16),
-                Text('Chưa có ngữ cảnh', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-                const SizedBox(height: 8),
-                Text(
-                  home.isAdmin
-                      ? 'Tạo ngữ cảnh như "Đi ngủ" (tắt hết đèn) hay "Về nhà" (bật đèn phòng khách), rồi đặt giờ để tự kích hoạt.'
-                      : 'Quản trị căn hộ có thể tạo ngữ cảnh để bật/tắt nhiều thiết bị cùng lúc.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: cs.onSurfaceVariant),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 120),
+          children: [
+            if (_error != null)
+              Card(
+                color: cs.errorContainer,
+                child: ListTile(
+                  leading: Icon(Icons.error_outline, color: cs.onErrorContainer),
+                  title: Text(_error!, style: TextStyle(color: cs.onErrorContainer)),
+                  trailing: TextButton(onPressed: _load, child: const Text('Thử lại')),
                 ),
-              ]),
-            ),
-          for (final s in scenes ?? const <Scene>[])
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: _SceneCard(
-                scene: s,
-                running: _running == s.id,
-                canRun: home.canControl,
-                onRun: () => _run(s),
-                onEdit: home.isAdmin ? () => _edit(s) : null,
               ),
-            ),
-        ]),
+            if (scenes == null && _error == null)
+              const Padding(
+                padding: EdgeInsets.only(top: 80),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            if (scenes != null && scenes.isEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 64, 24, 0),
+                child: Column(
+                  children: [
+                    Icon(Icons.auto_awesome_rounded, size: 56, color: cs.primary.withValues(alpha: .6)),
+                    const SizedBox(height: 16),
+                    Text('Chưa có ngữ cảnh', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 8),
+                    Text(
+                      home.isAdmin
+                          ? 'Tạo ngữ cảnh như "Đi ngủ" (tắt hết đèn) hay "Về nhà" (bật đèn phòng khách), rồi đặt giờ để tự kích hoạt.'
+                          : 'Quản trị căn hộ có thể tạo ngữ cảnh để bật/tắt nhiều thiết bị cùng lúc.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: cs.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+            for (final s in scenes ?? const <Scene>[])
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _SceneCard(
+                  scene: s,
+                  running: _running == s.id,
+                  canRun: home.canControl,
+                  onRun: () => _run(s),
+                  onEdit: home.isAdmin ? () => _edit(s) : null,
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -153,40 +171,109 @@ class _SceneCard extends StatelessWidget {
         onTap: onEdit,
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: Row(children: [
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(16)),
-              child: Icon(scene.kind.icon, color: cs.onPrimaryContainer),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(scene.name, style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w700), maxLines: 1, overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 2),
-                Text('${scene.actions.length} thiết bị', style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
-                const SizedBox(height: 6),
-                if (scene.autoEnabled && scene.autoTime != null)
-                  Row(children: [
-                    Icon(Icons.schedule_rounded, size: 16, color: cs.primary),
-                    const SizedBox(width: 4),
-                    Flexible(child: Text('Tự động ${scene.autoTime} · ${Scene.daysLabel(scene.autoDays)}', style: tt.bodySmall?.copyWith(color: cs.primary, fontWeight: FontWeight.w600))),
-                  ])
-                else
-                  Text('Chạy thủ công', style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
-                if (status != null && scene.autoEnabled)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(status, style: tt.bodySmall?.copyWith(color: bad ? cs.error : cs.onSurfaceVariant)),
-                  ),
-              ]),
-            ),
-            if (canRun)
-              running
-                  ? const Padding(padding: EdgeInsets.all(12), child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5)))
-                  : IconButton.filledTonal(onPressed: onRun, icon: const Icon(Icons.play_arrow_rounded), tooltip: 'Chạy ngay'),
-          ]),
+          child: Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(16)),
+                child: Icon(scene.kind.icon, color: cs.onPrimaryContainer),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            scene.name,
+                            style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (scene.active) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(color: cs.primary, borderRadius: BorderRadius.circular(10)),
+                            child: Text(
+                              'Đang bật',
+                              style: tt.labelSmall?.copyWith(color: cs.onPrimary, fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text('${scene.actions.length} thiết bị', style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
+                    if (scene.alertDevices.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Row(
+                          children: [
+                            Icon(Icons.notifications_active_rounded, size: 16, color: scene.active ? cs.primary : cs.onSurfaceVariant),
+                            const SizedBox(width: 4),
+                            Flexible(
+                              child: Text(
+                                'Cảnh báo ${scene.alertDevices.length} cảm biến',
+                                style: tt.bodySmall?.copyWith(color: scene.active ? cs.primary : cs.onSurfaceVariant, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (scene.autoLeave)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Row(
+                          children: [
+                            Icon(Icons.directions_walk_rounded, size: 16, color: cs.primary),
+                            const SizedBox(width: 4),
+                            Flexible(
+                              child: Text(
+                                'Tự chạy khi rời nhà',
+                                style: tt.bodySmall?.copyWith(color: cs.primary, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 6),
+                    if (scene.autoEnabled && scene.autoTime != null)
+                      Row(
+                        children: [
+                          Icon(Icons.schedule_rounded, size: 16, color: cs.primary),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              'Tự động ${scene.autoTime} · ${Scene.daysLabel(scene.autoDays)}',
+                              style: tt.bodySmall?.copyWith(color: cs.primary, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ],
+                      )
+                    else
+                      Text('Chạy thủ công', style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
+                    if (status != null && scene.autoEnabled)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(status, style: tt.bodySmall?.copyWith(color: bad ? cs.error : cs.onSurfaceVariant)),
+                      ),
+                  ],
+                ),
+              ),
+              if (canRun)
+                running
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5)),
+                      )
+                    : IconButton.filledTonal(onPressed: onRun, icon: const Icon(Icons.play_arrow_rounded), tooltip: 'Chạy ngay'),
+            ],
+          ),
         ),
       ),
     );
@@ -209,9 +296,15 @@ class _SceneSheetState extends State<_SceneSheet> {
   late final Map<String, Map<String, String>> _plan = {
     for (final a in widget.scene?.actions ?? <SceneAction>[]) a.deviceId: Map<String, String>.from(a.payload),
   };
+  late final Set<String> _alerts = {...?widget.scene?.alertDevices}; // cảm biến được báo khi ngữ cảnh này đang bật
   late bool _auto = widget.scene?.autoEnabled ?? false;
+  late bool _leave = widget.scene?.autoLeave ?? false; // tự chạy khi người cuối cùng rời nhà
+  late int _radius = widget.model.home?.geoRadius ?? 150;
+  bool _locBusy = false;
   late TimeOfDay _time = _parse(widget.scene?.autoTime) ?? const TimeOfDay(hour: 18, minute: 0);
-  late final Set<int> _days = {...(widget.scene?.autoDays ?? [1, 2, 3, 4, 5, 6, 7])};
+  late final Set<int> _days = {
+    ...(widget.scene?.autoDays ?? [1, 2, 3, 4, 5, 6, 7]),
+  };
   bool _busy = false;
   String? _error;
 
@@ -241,11 +334,15 @@ class _SceneSheetState extends State<_SceneSheet> {
     if (name.isEmpty) return setState(() => _error = 'Nhập tên ngữ cảnh');
     if (actions.isEmpty) return setState(() => _error = 'Chọn ít nhất một thiết bị để bật hoặc tắt');
     if (_auto && _days.isEmpty) return setState(() => _error = 'Chọn ít nhất một ngày trong tuần');
+    if (_leave && widget.model.home?.hasLocation != true) return setState(() => _error = 'Hãy đặt vị trí căn hộ để dùng "Tự chuyển khi rời nhà"');
     setState(() {
       _busy = true;
       _error = null;
     });
     final m = widget.model;
+    // Chỉ giữ cảm biến còn tồn tại trong căn hộ (cảm biến đã xoá sẽ bị máy chủ từ chối).
+    final known = m.devices.where((d) => d.isAlertSensor).map((d) => d.id).toSet();
+    final alerts = _alerts.where(known.contains).toList();
     final body = {
       'name': name,
       'icon': _kind.id,
@@ -253,13 +350,20 @@ class _SceneSheetState extends State<_SceneSheet> {
       'auto_enabled': _auto,
       'auto_time': _timeText,
       'auto_days': (_days.toList()..sort()),
+      'alert_devices': alerts,
+      'auto_leave': _leave,
     };
     try {
+      // Bật cảnh báo thì xin quyền hiển thị thông báo đúng lúc này (không hỏi khi mở app).
+      if (alerts.isNotEmpty && await Notifier.requestPermission()) unawaited(PushService.sync(m.api));
       if (_editing) {
         await m.api.updateScene(widget.scene!.id, body);
       } else {
         await m.api.createScene(m.home!.id, body);
       }
+      await m.reloadScenes();
+      // Ngữ cảnh "rời nhà": xin quyền vị trí "Luôn luôn" đúng lúc này để geofence chạy được khi app đóng.
+      if (_leave) await m.enableLocationTracking();
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {
@@ -271,6 +375,118 @@ class _SceneSheetState extends State<_SceneSheet> {
     }
   }
 
+  /// Chọn cảm biến hiện diện / cửa sẽ báo khi ngữ cảnh này đang bật.
+  List<Widget> _alertSection(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    final sensors = widget.model.devices.where((d) => d.isAlertSensor).toList();
+    return [
+      Text('Cảnh báo cảm biến', style: tt.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+      const SizedBox(height: 2),
+      Text(
+        'Khi ngữ cảnh này đang bật (chạy bằng tay hoặc theo giờ), báo cho thành viên mỗi lần cảm biến được kích hoạt.',
+        style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+      ),
+      const SizedBox(height: 6),
+      if (sensors.isEmpty)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Text('Căn hộ chưa có cảm biến hiện diện hoặc cửa.', style: TextStyle(color: cs.onSurfaceVariant)),
+        ),
+      for (final d in sensors)
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          secondary: Icon(d.hasDoor ? Icons.door_front_door_outlined : Icons.directions_walk_rounded, color: cs.primary),
+          title: Text(d.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: Text(
+            d.hasDoor && !d.hasPresence ? 'Báo khi cửa mở' : (d.hasPresence && !d.hasDoor ? 'Báo khi phát hiện có người' : 'Báo khi có người / cửa mở'),
+          ),
+          value: _alerts.contains(d.id),
+          onChanged: (v) => setState(() => v ? _alerts.add(d.id) : _alerts.remove(d.id)),
+        ),
+    ];
+  }
+
+  /// Đặt vị trí căn hộ = vị trí hiện tại của quản trị (nên bấm khi đang ở nhà).
+  Future<void> _setLocation() async {
+    final m = widget.model;
+    setState(() {
+      _locBusy = true;
+      _error = null;
+    });
+    try {
+      final pos = await GeofenceService.currentPosition();
+      if (pos == null) {
+        if (mounted) setState(() => _error = 'Không lấy được vị trí. Hãy bật dịch vụ vị trí và cho phép app truy cập vị trí.');
+      } else {
+        await m.setHomeLocation(pos.latitude, pos.longitude, _radius);
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    }
+    if (mounted) setState(() => _locBusy = false);
+  }
+
+  Future<void> _setRadius(int r) async {
+    setState(() => _radius = r);
+    final h = widget.model.home;
+    if (h != null && h.hasLocation) {
+      try {
+        await widget.model.setHomeLocation(h.geoLat!, h.geoLng!, r);
+      } catch (e) {
+        if (mounted) setState(() => _error = e.toString());
+      }
+      if (mounted) setState(() {});
+    }
+  }
+
+  /// "Tự chuyển khi rời nhà": chạy ngữ cảnh này khi người cuối cùng (trong số thành viên đang chia sẻ vị trí) rời khỏi căn hộ.
+  List<Widget> _leaveSection(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    final h = widget.model.home;
+    final has = h?.hasLocation == true;
+    return [
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Tự chuyển khi rời nhà', style: TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: const Text('Chạy ngữ cảnh này khi người cuối cùng rời khỏi căn hộ (theo vị trí điện thoại)'),
+        value: _leave,
+        onChanged: (v) => setState(() => _leave = v),
+      ),
+      if (_leave) ...[
+        Row(
+          children: [
+            Icon(has ? Icons.location_on_rounded : Icons.location_off_rounded, color: has ? cs.primary : cs.error),
+            const SizedBox(width: 8),
+            Expanded(child: Text(has ? 'Đã đặt vị trí căn hộ · bán kính ${h!.geoRadius} m' : 'Chưa đặt vị trí căn hộ')),
+            FilledButton.tonal(
+              onPressed: _locBusy || _busy ? null : _setLocation,
+              child: _locBusy
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : Text(has ? 'Cập nhật' : 'Dùng vị trí hiện tại'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          children: [
+            for (final r in const [100, 150, 300, 500]) ChoiceChip(label: Text('$r m'), selected: _radius == r, onSelected: (_) => _setRadius(r)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Bấm "Dùng vị trí hiện tại" khi đang ở nhà. Mỗi thành viên cần cho phép vị trí "Luôn luôn" trên điện thoại của mình; máy chủ chỉ nhận trạng thái trong/ngoài, không lưu toạ độ. '
+          'Chỉ một ngữ cảnh mỗi căn hộ dùng được tuỳ chọn này (bật ở đây sẽ tắt ở ngữ cảnh khác). Nếu bộ điều khiển trung tâm đang offline lúc rời nhà, ngữ cảnh không chạy bù sau đó.',
+          style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+        ),
+        const SizedBox(height: 4),
+      ],
+    ];
+  }
+
   Future<void> _delete() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -279,7 +495,11 @@ class _SceneSheetState extends State<_SceneSheet> {
         content: Text('Xoá "${widget.scene!.name}". Thiết bị không bị ảnh hưởng.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Huỷ')),
-          FilledButton(style: FilledButton.styleFrom(backgroundColor: Theme.of(c).colorScheme.error), onPressed: () => Navigator.pop(c, true), child: const Text('Xoá')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Theme.of(c).colorScheme.error),
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('Xoá'),
+          ),
         ],
       ),
     );
@@ -287,6 +507,7 @@ class _SceneSheetState extends State<_SceneSheet> {
     setState(() => _busy = true);
     try {
       await widget.model.api.deleteScene(widget.scene!.id);
+      await widget.model.reloadScenes();
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {
@@ -299,26 +520,31 @@ class _SceneSheetState extends State<_SceneSheet> {
   }
 
   Future<void> _pickTime() async {
-    final t = await showTimePicker(context: context, initialTime: _time, builder: (c, w) => MediaQuery(data: MediaQuery.of(c).copyWith(alwaysUse24HourFormat: true), child: w!));
+    final t = await showTimePicker(
+      context: context,
+      initialTime: _time,
+      builder: (c, w) => MediaQuery(data: MediaQuery.of(c).copyWith(alwaysUse24HourFormat: true), child: w!),
+    );
     if (t != null) setState(() => _time = t);
   }
 
   void _set(String deviceId, String key, String? v) => setState(() {
-        final p = _plan.putIfAbsent(deviceId, () => {});
-        if (v == null) {
-          p.remove(key);
-        } else {
-          p[key] = v;
-        }
-        if (p.isEmpty) _plan.remove(deviceId);
-      });
+    final p = _plan.putIfAbsent(deviceId, () => {});
+    if (v == null) {
+      p.remove(key);
+    } else {
+      p[key] = v;
+    }
+    if (p.isEmpty) _plan.remove(deviceId);
+  });
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
-    final devices = widget.model.devices.where((d) => d.switchKeys.isNotEmpty).toList();
+    final devices = widget.model.devices.where((d) => d.switchKeys.isNotEmpty || d.isCover).toList();
     final rooms = {for (final r in widget.model.rooms) r.id: r.name};
+    final others = widget.model.devices.where((d) => d.switchKeys.isEmpty && !d.isCover).toList(); // cảm biến… không có bật/tắt
     final known = devices.map((d) => d.id).toSet();
     final missing = _plan.keys.where((id) => !known.contains(id)).length; // thiết bị đã bị xoá khỏi căn hộ
     const dayNames = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
@@ -327,109 +553,190 @@ class _SceneSheetState extends State<_SceneSheet> {
       child: Padding(
         padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(context).viewInsets.bottom),
         child: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Text(_editing ? 'Sửa ngữ cảnh' : 'Ngữ cảnh mới', style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _name,
-              autofocus: !_editing,
-              textCapitalization: TextCapitalization.sentences,
-              maxLength: 60,
-              decoration: const InputDecoration(labelText: 'Tên ngữ cảnh', hintText: 'vd: Đi ngủ', counterText: ''),
-            ),
-            const SizedBox(height: 16),
-            Text('Biểu tượng', style: tt.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-            const SizedBox(height: 8),
-            Wrap(spacing: 8, runSpacing: 8, children: [
-              for (final k in SceneKind.values)
-                ChoiceChip(
-                  showCheckmark: false,
-                  avatar: Icon(k.icon, size: 18, color: k == _kind ? cs.onPrimaryContainer : cs.onSurfaceVariant),
-                  label: Text(k.label),
-                  selected: k == _kind,
-                  onSelected: (_) => setState(() => _kind = k),
-                ),
-            ]),
-            const SizedBox(height: 20),
-            Text('Thiết bị', style: tt.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-            const SizedBox(height: 2),
-            Text('Với mỗi công tắc chọn Bật, Tắt hoặc giữ nguyên.', style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
-            const SizedBox(height: 8),
-            if (devices.isEmpty) Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Text('Căn hộ chưa có công tắc nào.', style: TextStyle(color: cs.onSurfaceVariant))),
-            for (final d in devices)
-              Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-                decoration: BoxDecoration(color: cs.surfaceContainerHighest.withValues(alpha: .4), borderRadius: BorderRadius.circular(16)),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(d.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                  Text(rooms[d.roomId] ?? 'Chưa phân phòng', style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
-                  const SizedBox(height: 8),
-                  for (final key in d.switchKeys)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Row(children: [
-                        Expanded(child: Text(d.labelFor(key), overflow: TextOverflow.ellipsis)),
-                        SegmentedButton<String>(
-                          showSelectedIcon: false,
-                          style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                          emptySelectionAllowed: true,
-                          segments: const [ButtonSegment(value: 'ON', label: Text('Bật')), ButtonSegment(value: 'OFF', label: Text('Tắt'))],
-                          selected: {if (_plan[d.id]?[key] != null) _plan[d.id]![key]!},
-                          onSelectionChanged: (s) => _set(d.id, key, s.isEmpty ? null : s.first),
-                        ),
-                      ]),
-                    ),
-                ]),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(_editing ? 'Sửa ngữ cảnh' : 'Ngữ cảnh mới', style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _name,
+                autofocus: !_editing,
+                textCapitalization: TextCapitalization.sentences,
+                maxLength: 60,
+                decoration: const InputDecoration(labelText: 'Tên ngữ cảnh', hintText: 'vd: Đi ngủ', counterText: ''),
               ),
-            if (missing > 0)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text('$missing thiết bị trong ngữ cảnh đã bị xoá khỏi căn hộ; chúng sẽ bị bỏ khi bạn lưu.', style: tt.bodySmall?.copyWith(color: cs.error)),
-              ),
-            const SizedBox(height: 12),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Tự động kích hoạt', style: TextStyle(fontWeight: FontWeight.w700)),
-              subtitle: const Text('Chạy ngữ cảnh vào giờ đã chọn, không cần mở app'),
-              value: _auto,
-              onChanged: (v) => setState(() => _auto = v),
-            ),
-            if (_auto) ...[
-              const SizedBox(height: 4),
-              OutlinedButton.icon(
-                onPressed: _pickTime,
-                icon: const Icon(Icons.schedule_rounded),
-                label: Text('Lúc $_timeText', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-                style: OutlinedButton.styleFrom(minimumSize: const Size(0, 52), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-              ),
-              const SizedBox(height: 12),
-              Wrap(spacing: 6, runSpacing: 6, children: [
-                for (var i = 0; i < 7; i++)
-                  FilterChip(
-                    showCheckmark: false,
-                    label: Text(dayNames[i]),
-                    selected: _days.contains(i + 1),
-                    onSelected: (v) => setState(() => v ? _days.add(i + 1) : _days.remove(i + 1)),
-                  ),
-              ]),
+              const SizedBox(height: 16),
+              Text('Biểu tượng', style: tt.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
-              Text(
-                'Giờ theo múi giờ của căn hộ. Nếu bộ điều khiển trung tâm offline lúc đến giờ, ngữ cảnh được thử lại trong 5 phút; quá thời gian đó sẽ bị bỏ lỡ chứ không chạy bù muộn.',
-                style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final k in SceneKind.values)
+                    ChoiceChip(
+                      showCheckmark: false,
+                      avatar: Icon(k.icon, size: 18, color: k == _kind ? cs.onPrimaryContainer : cs.onSurfaceVariant),
+                      label: Text(k.label),
+                      selected: k == _kind,
+                      onSelected: (_) => setState(() => _kind = k),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              Text('Thiết bị', style: tt.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              Text('Với mỗi công tắc chọn Bật, Tắt; với rèm chọn Mở, Đóng; hoặc giữ nguyên.', style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
+              const SizedBox(height: 8),
+              if (devices.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text('Căn hộ chưa có công tắc nào.', style: TextStyle(color: cs.onSurfaceVariant)),
+                ),
+              for (final d in devices)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+                  decoration: BoxDecoration(color: cs.surfaceContainerHighest.withValues(alpha: .4), borderRadius: BorderRadius.circular(16)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(d.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                      Text(rooms[d.roomId] ?? 'Chưa phân phòng', style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
+                      const SizedBox(height: 8),
+                      if (d.isCover)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 6),
+                          child: Row(
+                            children: [
+                              const Expanded(child: Text('Rèm / cửa cuốn')),
+                              SegmentedButton<String>(
+                                showSelectedIcon: false,
+                                style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                                emptySelectionAllowed: true,
+                                segments: const [
+                                  ButtonSegment(value: 'OPEN', label: Text('Mở')),
+                                  ButtonSegment(value: 'CLOSE', label: Text('Đóng')),
+                                ],
+                                selected: {if (_plan[d.id]?['state'] != null) _plan[d.id]!['state']!},
+                                onSelectionChanged: (s) => _set(d.id, 'state', s.isEmpty ? null : s.first),
+                              ),
+                            ],
+                          ),
+                        ),
+                      for (final key in d.switchKeys)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 6),
+                          child: Row(
+                            children: [
+                              Expanded(child: Text(d.labelFor(key), overflow: TextOverflow.ellipsis)),
+                              SegmentedButton<String>(
+                                showSelectedIcon: false,
+                                style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                                emptySelectionAllowed: true,
+                                segments: const [
+                                  ButtonSegment(value: 'ON', label: Text('Bật')),
+                                  ButtonSegment(value: 'OFF', label: Text('Tắt')),
+                                ],
+                                selected: {if (_plan[d.id]?[key] != null) _plan[d.id]![key]!},
+                                onSelectionChanged: (s) => _set(d.id, key, s.isEmpty ? null : s.first),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              if (others.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline_rounded, size: 16, color: cs.onSurfaceVariant),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          '${others.length} thiết bị không có công tắc bật/tắt nên không đưa vào ngữ cảnh: ${others.map((d) => d.name).join(', ')}.',
+                          style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              if (missing > 0)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    '$missing thiết bị trong ngữ cảnh đã bị xoá khỏi căn hộ; chúng sẽ bị bỏ khi bạn lưu.',
+                    style: tt.bodySmall?.copyWith(color: cs.error),
+                  ),
+                ),
+              const SizedBox(height: 12),
+              ..._alertSection(context),
+              const SizedBox(height: 4),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Tự động kích hoạt', style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: const Text('Chạy ngữ cảnh vào giờ đã chọn, không cần mở app'),
+                value: _auto,
+                onChanged: (v) => setState(() => _auto = v),
+              ),
+              if (_auto) ...[
+                const SizedBox(height: 4),
+                OutlinedButton.icon(
+                  onPressed: _pickTime,
+                  icon: const Icon(Icons.schedule_rounded),
+                  label: Text('Lúc $_timeText', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 52),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (var i = 0; i < 7; i++)
+                      FilterChip(
+                        showCheckmark: false,
+                        label: Text(dayNames[i]),
+                        selected: _days.contains(i + 1),
+                        onSelected: (v) => setState(() => v ? _days.add(i + 1) : _days.remove(i + 1)),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Giờ theo múi giờ của căn hộ. Nếu bộ điều khiển trung tâm offline lúc đến giờ, ngữ cảnh được thử lại trong 5 phút; quá thời gian đó sẽ bị bỏ lỡ chứ không chạy bù muộn.',
+                  style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                ),
+              ],
+              ..._leaveSection(context),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(_error!, style: TextStyle(color: cs.error)),
+                ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  if (_editing)
+                    TextButton.icon(
+                      style: TextButton.styleFrom(foregroundColor: cs.error),
+                      onPressed: _busy ? null : _delete,
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      label: const Text('Xoá'),
+                    ),
+                  const Spacer(),
+                  TextButton(onPressed: _busy ? null : () => Navigator.pop(context), child: const Text('Huỷ')),
+                  const SizedBox(width: 8),
+                  FilledButton(onPressed: _busy ? null : _save, child: Text(_editing ? 'Lưu' : 'Tạo')),
+                ],
               ),
             ],
-            if (_error != null) Padding(padding: const EdgeInsets.only(top: 12), child: Text(_error!, style: TextStyle(color: cs.error))),
-            const SizedBox(height: 20),
-            Row(children: [
-              if (_editing)
-                TextButton.icon(style: TextButton.styleFrom(foregroundColor: cs.error), onPressed: _busy ? null : _delete, icon: const Icon(Icons.delete_outline_rounded), label: const Text('Xoá')),
-              const Spacer(),
-              TextButton(onPressed: _busy ? null : () => Navigator.pop(context), child: const Text('Huỷ')),
-              const SizedBox(width: 8),
-              FilledButton(onPressed: _busy ? null : _save, child: Text(_editing ? 'Lưu' : 'Tạo')),
-            ]),
-          ]),
+          ),
         ),
       ),
     );

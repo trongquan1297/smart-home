@@ -37,6 +37,11 @@ services:
       # Giới hạn đăng nhập theo IP: khi backend CHỈ truy cập được qua Cloudflare Tunnel (không publish cổng 8080),
       # đặt TRUSTED_IP_HEADER=CF-Connecting-IP để lấy IP thật. Để trống nếu backend lộ trực tiếp (header giả mạo được).
       TRUSTED_IP_HEADER: ${TRUSTED_IP_HEADER:-}
+      # Thông báo đẩy FCM: đặt file service account Firebase vào ./secrets rồi đặt
+      # FCM_SERVICE_ACCOUNT_FILE=/run/secrets/fcm.json (để trống = tắt FCM, cảnh báo vẫn tới app qua WebSocket).
+      FCM_SERVICE_ACCOUNT_FILE: ${FCM_SERVICE_ACCOUNT_FILE:-}
+    volumes:
+      - ./secrets:/run/secrets:ro
     depends_on:
       postgres:
         condition: service_healthy

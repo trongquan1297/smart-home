@@ -2,7 +2,7 @@
 //! Pi không cần public IP / mở port, đi xuyên NAT và qua được Cloudflare.
 use axum::{
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
+        ws::{rejection::WebSocketUpgradeRejection, Message, WebSocket, WebSocketUpgrade},
         State,
     },
     http::HeaderMap,
@@ -44,7 +44,7 @@ enum GwMsg {
     Ping,
 }
 
-pub async fn handler(State(st): State<AppState>, headers: HeaderMap, ws: WebSocketUpgrade) -> ApiResult<Response> {
+pub async fn handler(State(st): State<AppState>, headers: HeaderMap, ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>) -> ApiResult<Response> {
     let token = auth::bearer(&headers).ok_or(ApiError::Unauthorized)?;
     let token_hash = auth::hash_token(&token);
     let row: Option<(Uuid, Uuid, Uuid)> =
@@ -54,6 +54,7 @@ pub async fn handler(State(st): State<AppState>, headers: HeaderMap, ws: WebSock
             .await?;
     let (id, tenant_id, home_id) = row.ok_or(ApiError::Unauthorized)?;
     let gw = Gw { id, tenant_id, home_id, token_hash };
+    let ws = crate::client_ws::upgrade_or_log("gateway", &headers, ws)?;
     Ok(ws.on_upgrade(move |socket| session(st, gw, socket)))
 }
 
@@ -121,7 +122,8 @@ async fn touch(st: &AppState, gw: &Gw) {
         .await;
 }
 
-/// Phân loại thiết bị từ `exposes` của Zigbee2MQTT: light | switch | sensor | other.
+/// Phân loại thiết bị từ `exposes` của Zigbee2MQTT: light | switch | cover | sensor | other.
+/// Dựa vào cấu trúc exposes chứ không dựa vào hãng, nên Aqara/Tuya/VSmart… dùng chung một đường xử lý.
 fn kind_of(exposes: &[Value]) -> &'static str {
     let has_type = |t: &str| exposes.iter().any(|e| e.get("type").and_then(Value::as_str) == Some(t));
     let has_prop = |ps: &[&str]| {
@@ -131,7 +133,12 @@ fn kind_of(exposes: &[Value]) -> &'static str {
         "light"
     } else if has_type("switch") {
         "switch"
-    } else if has_prop(&["contact", "occupancy", "motion", "water_leak", "smoke", "temperature", "humidity"]) {
+    } else if has_type("cover") {
+        "cover"
+    } else if has_prop(&[
+        "contact", "occupancy", "motion", "water_leak", "smoke", "temperature", "humidity", "pressure", "illuminance",
+        "illuminance_lux", "vibration", "co2", "pm25", "soil_moisture", "gas",
+    ]) {
         "sensor"
     } else {
         "other"
@@ -192,17 +199,20 @@ async fn handle(st: &AppState, gw: &Gw, msg: GwMsg) -> ApiResult<()> {
             if !payload.is_object() {
                 return Ok(());
             }
-            let row: Option<(Uuid, Value)> = sqlx::query_as(
-                "UPDATE devices SET state = state || $3, last_seen_at = now()
-                 WHERE gateway_id = $1 AND friendly_name = $2 RETURNING id, state",
+            // Lấy cả trạng thái CŨ để phát hiện chuyển trạng thái của cảm biến (cảnh báo theo ngữ cảnh).
+            let row: Option<(Uuid, Value, Value)> = sqlx::query_as(
+                "WITH old AS (SELECT id, state FROM devices WHERE gateway_id = $1 AND friendly_name = $2 FOR UPDATE)
+                 UPDATE devices d SET state = d.state || $3, last_seen_at = now()
+                   FROM old WHERE d.id = old.id RETURNING d.id, d.state, old.state",
             )
             .bind(gw.id)
             .bind(&friendly_name)
             .bind(&payload)
             .fetch_optional(&st.db)
             .await?;
-            if let Some((id, state)) = row {
+            if let Some((id, state, old_state)) = row {
                 st.hub.publish(gw.home_id, json!({"type": "device_state", "device_id": id, "state": state}).to_string());
+                crate::alerts::on_state(st, gw.home_id, id, &old_state, &state).await;
             }
         }
         GwMsg::Availability { friendly_name, online } => {
@@ -220,4 +230,29 @@ async fn handle(st: &AppState, gw: &Gw, msg: GwMsg) -> ApiResult<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kinds(exposes: Value) -> &'static str {
+        kind_of(exposes.as_array().unwrap())
+    }
+
+    #[test]
+    fn vendor_neutral_classification() {
+        // Aqara QBKG03LM: hai gang left/right (kiểu switch)
+        assert_eq!(kinds(json!([{"type":"switch","endpoint":"left","features":[{"type":"binary","property":"state_left"}]}])), "switch");
+        // Tuya TS130F: rèm
+        assert_eq!(kinds(json!([{"type":"cover","features":[{"type":"enum","property":"state"},{"type":"numeric","property":"position"}]}])), "cover");
+        // Aqara WSDCGQ11LM: nhiệt độ/độ ẩm/áp suất
+        assert_eq!(kinds(json!([{"type":"numeric","property":"battery"},{"type":"numeric","property":"temperature"}])), "sensor");
+        assert_eq!(kinds(json!([{"type":"numeric","property":"illuminance"},{"type":"binary","property":"occupancy"}])), "sensor");
+        assert_eq!(kinds(json!([{"type":"binary","property":"water_leak"}])), "sensor");
+        // ổ cắm đo điện (switch + power) vẫn là switch, không bị nhầm thành cảm biến
+        assert_eq!(kinds(json!([{"type":"switch","features":[{"type":"binary","property":"state"}]},{"type":"numeric","property":"power"}])), "switch");
+        assert_eq!(kinds(json!([{"type":"light","features":[]}])), "light");
+        assert_eq!(kinds(json!([{"type":"numeric","property":"battery"}])), "other");
+    }
 }

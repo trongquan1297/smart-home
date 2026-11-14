@@ -2,7 +2,7 @@ use axum::{
     extract::{ConnectInfo, Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::{
     access::{self, Role},
     auth::{self, AuthUser},
-    automation, client_ws, gateway_ws,
+    alerts, automation, client_ws, gateway_ws, presence,
     error::{ApiError, ApiResult},
     AppState,
 };
@@ -35,7 +35,7 @@ pub fn router(st: AppState) -> Router {
         .route("/v1/homes", get(list_homes))
         // members & invites
         .route("/v1/homes/:hid/members", get(list_members))
-        .route("/v1/homes/:hid/members/:uid", delete(remove_member))
+        .route("/v1/homes/:hid/members/:uid", delete(remove_member).patch(member_action))
         .route("/v1/homes/:hid/invites", post(create_invite))
         .route("/v1/invites/accept", post(accept_invite))
         // gateways
@@ -53,6 +53,12 @@ pub fn router(st: AppState) -> Router {
         .route("/v1/homes/:hid/scenes", get(automation::list_scenes).post(automation::create_scene))
         .route("/v1/scenes/:sid", patch(automation::update_scene).delete(automation::delete_scene))
         .route("/v1/scenes/:sid/run", post(automation::run_scene))
+        .route("/v1/homes/:hid/location", put(presence::set_location).delete(presence::clear_location))
+        .route("/v1/homes/:hid/presence", put(presence::report))
+        .route("/v1/homes/:hid/active-scene", delete(automation::deactivate_scene))
+        // thông báo: lịch sử + đăng ký token đẩy của thiết bị
+        .route("/v1/homes/:hid/notifications", get(alerts::list_notifications))
+        .route("/v1/push/tokens", post(alerts::register_token).delete(alerts::delete_token))
         // Matter bridge (Google Home / Apple Home)
         .route("/v1/homes/:hid/matter", get(matter_info))
         .route("/v1/homes/:hid/matter/pairing", post(matter_pairing))
@@ -304,13 +310,31 @@ struct HomeOut {
     address: Option<String>,
     timezone: String,
     role: String,
+    /// Chỉ có với khách thuê: thời điểm hết quyền truy cập.
+    access_until: Option<DateTime<Utc>>,
+    /// Chỉ có với khách thuê: thời điểm bắt đầu có quyền (check-in).
+    access_from: Option<DateTime<Utc>>,
+    /// Chỉ có với khách thuê: `scheduled` (đã nhận mã nhưng chưa tới giờ check-in) | `active`.
+    access_status: Option<String>,
+    /// Vị trí căn hộ (đặt bởi quản trị) cho geofence "rời nhà"; null nếu chưa đặt.
+    geo_lat: Option<f64>,
+    geo_lng: Option<f64>,
+    geo_radius_m: i32,
 }
 
 async fn list_homes(State(st): State<AppState>, AuthUser(uid): AuthUser) -> ApiResult<Json<Vec<HomeOut>>> {
     let rows = sqlx::query_as::<_, HomeOut>(
-        "SELECT h.id, h.tenant_id, h.name, h.address, h.timezone, COALESCE(hm.role, 'admin') AS role
+        "SELECT h.id, h.tenant_id, h.name,
+                -- địa chỉ căn hộ chỉ lộ cho khách thuê khi đã tới giờ check-in
+                CASE WHEN hm.role = 'renter' AND now() < hm.valid_from THEN NULL ELSE h.address END AS address,
+                h.timezone, h.geo_lat, h.geo_lng, h.geo_radius_m, COALESCE(hm.role, 'admin') AS role,
+                CASE WHEN hm.role = 'renter' THEN hm.valid_until END AS access_until,
+                CASE WHEN hm.role = 'renter' THEN hm.valid_from END AS access_from,
+                CASE WHEN hm.role = 'renter' THEN CASE WHEN now() < hm.valid_from THEN 'scheduled' ELSE 'active' END END AS access_status
          FROM homes h
+         -- khách thuê chưa tới giờ vẫn thấy căn hộ (để hiện đồng hồ đếm ngược); hết hạn thì ẩn. Truy cập dữ liệu vẫn do access::home_role chặn.
          LEFT JOIN home_members   hm ON hm.home_id = h.id AND hm.user_id = $1
+              AND (hm.role <> 'renter' OR now() < hm.valid_until)
          LEFT JOIN tenant_members tm ON tm.tenant_id = h.tenant_id AND tm.user_id = $1
          WHERE hm.user_id IS NOT NULL OR tm.user_id IS NOT NULL
          ORDER BY h.created_at",
@@ -329,12 +353,24 @@ struct MemberOut {
     name: String,
     email: String,
     role: String,
+    /// Khách thuê: cửa sổ truy cập và trạng thái scheduled | active | expired.
+    valid_from: Option<DateTime<Utc>>,
+    valid_until: Option<DateTime<Utc>>,
+    duration_hours: Option<i32>,
+    status: Option<String>,
 }
 
 async fn list_members(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(hid): Path<Uuid>) -> ApiResult<Json<Vec<MemberOut>>> {
-    access::require(&st.db, uid, hid, Role::Guest).await?;
+    // Khách thuê không được xem danh sách (có email của gia đình).
+    if access::require(&st.db, uid, hid, Role::Guest).await? == Role::Renter {
+        return Err(ApiError::Forbidden);
+    }
     let rows = sqlx::query_as::<_, MemberOut>(
-        "SELECT u.id AS user_id, u.name, u.email, hm.role FROM home_members hm JOIN users u ON u.id = hm.user_id
+        "SELECT u.id AS user_id, u.name, u.email, hm.role, hm.valid_from, hm.valid_until, hm.duration_hours,
+                CASE WHEN hm.role = 'renter' THEN
+                  CASE WHEN now() < hm.valid_from THEN 'scheduled' WHEN now() >= hm.valid_until THEN 'expired' ELSE 'active' END
+                END AS status
+         FROM home_members hm JOIN users u ON u.id = hm.user_id
          WHERE hm.home_id = $1 ORDER BY hm.created_at",
     )
     .bind(hid)
@@ -363,26 +399,106 @@ async fn remove_member(State(st): State<AppState>, AuthUser(uid): AuthUser, Path
         .bind(target)
         .execute(&st.db)
         .await?;
+    // Thu hồi có hiệu lực ngay: các WebSocket đang mở của căn hộ kiểm tra lại quyền lập tức.
+    st.hub.publish(hid, client_ws::ACCESS_CHECK.to_owned());
     Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
+struct MemberActionReq {
+    /// grant_now: bắt đầu (hoặc cấp lại) cửa sổ truy cập của khách thuê NGAY; extend: cộng thêm `hours`.
+    action: String,
+    hours: Option<i32>,
+}
+
+/// Quản trị can thiệp vào quyền của khách thuê: cấp ngay / gia hạn. (Thu hồi ngay = DELETE thành viên.)
+async fn member_action(State(st): State<AppState>, AuthUser(uid): AuthUser, Path((hid, target)): Path<(Uuid, Uuid)>, Json(b): Json<MemberActionReq>) -> ApiResult<Json<Value>> {
+    access::require(&st.db, uid, hid, Role::Admin).await?;
+    let status: Option<String> = sqlx::query_scalar(
+        "SELECT CASE WHEN now() < valid_from THEN 'scheduled' WHEN now() >= valid_until THEN 'expired' ELSE 'active' END
+         FROM home_members WHERE home_id=$1 AND user_id=$2 AND role='renter'",
+    )
+    .bind(hid)
+    .bind(target)
+    .fetch_optional(&st.db)
+    .await?;
+    let status = status.ok_or(ApiError::NotFound)?; // không phải khách thuê của căn hộ này
+    match b.action.as_str() {
+        "grant_now" => {
+            if status == "active" {
+                return Err(ApiError::Conflict("access is already active".into()));
+            }
+            sqlx::query("UPDATE home_members SET valid_from = now(), valid_until = now() + make_interval(hours => duration_hours) WHERE home_id=$1 AND user_id=$2")
+                .bind(hid)
+                .bind(target)
+                .execute(&st.db)
+                .await?;
+        }
+        "extend" => {
+            let h = b.hours.filter(|h| (1..=MAX_RENTER_HOURS).contains(h)).ok_or_else(|| ApiError::BadRequest(format!("hours must be 1..{MAX_RENTER_HOURS}")))?;
+            // Hết hạn rồi thì tính từ bây giờ; còn hạn / chưa bắt đầu thì cộng nối tiếp. Luôn đảm bảo đã bắt đầu nếu đã hết hạn.
+            sqlx::query(
+                "UPDATE home_members SET
+                   valid_from = CASE WHEN now() >= valid_until THEN now() ELSE valid_from END,
+                   valid_until = GREATEST(valid_until, now()) + make_interval(hours => $3)
+                 WHERE home_id=$1 AND user_id=$2",
+            )
+            .bind(hid)
+            .bind(target)
+            .bind(h)
+            .execute(&st.db)
+            .await?;
+        }
+        _ => return Err(ApiError::BadRequest("action must be grant_now|extend".into())),
+    }
+    st.hub.publish(hid, client_ws::ACCESS_CHECK.to_owned());
+    let (from, until): (DateTime<Utc>, DateTime<Utc>) = sqlx::query_as("SELECT valid_from, valid_until FROM home_members WHERE home_id=$1 AND user_id=$2")
+        .bind(hid)
+        .bind(target)
+        .fetch_one(&st.db)
+        .await?;
+    Ok(Json(json!({ "valid_from": from, "valid_until": until })))
+}
+
+const MAX_RENTER_HOURS: i32 = 24 * 365;
+
+#[derive(Deserialize)]
 struct InviteReq {
     role: String,
+    /// Chỉ cho role "renter": số giờ được dùng (1..=8760), tính từ lúc bắt đầu.
+    duration_hours: Option<i32>,
+    /// Chỉ cho role "renter": giờ bắt đầu có hiệu lực (tương lai ≤ 1 năm). Bỏ trống = khi khách chấp nhận lời mời.
+    starts_at: Option<DateTime<Utc>>,
 }
 
 async fn create_invite(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(hid): Path<Uuid>, Json(b): Json<InviteReq>) -> ApiResult<(StatusCode, Json<Value>)> {
     let my = access::require(&st.db, uid, hid, Role::Admin).await?;
-    let role = Role::parse(&b.role).filter(|r| *r != Role::Owner).ok_or_else(|| ApiError::BadRequest("role must be admin|member|guest".into()))?;
+    let role = Role::parse(&b.role).filter(|r| *r != Role::Owner).ok_or_else(|| ApiError::BadRequest("role must be admin|member|renter|guest".into()))?;
     if role == Role::Admin && my < Role::Owner {
         return Err(ApiError::Forbidden);
     }
+    let (duration, starts_at) = if role == Role::Renter {
+        let h = b.duration_hours.filter(|h| (1..=MAX_RENTER_HOURS).contains(h)).ok_or_else(|| ApiError::BadRequest(format!("duration_hours must be 1..{MAX_RENTER_HOURS} for renter")))?;
+        if let Some(t) = b.starts_at {
+            if t > Utc::now() + chrono::Duration::days(365) {
+                return Err(ApiError::BadRequest("starts_at must be within 1 year".into()));
+            }
+        }
+        (Some(h), b.starts_at)
+    } else {
+        if b.duration_hours.is_some() || b.starts_at.is_some() {
+            return Err(ApiError::BadRequest("duration_hours/starts_at only apply to role renter".into()));
+        }
+        (None, None)
+    };
     let token = auth::random_token("inv");
-    sqlx::query("INSERT INTO home_invites (token_hash, home_id, role, created_by, expires_at) VALUES ($1,$2,$3,$4, now() + interval '7 days')")
+    sqlx::query("INSERT INTO home_invites (token_hash, home_id, role, created_by, expires_at, duration_hours, starts_at) VALUES ($1,$2,$3,$4, now() + interval '7 days', $5, $6)")
         .bind(auth::hash_token(&token))
         .bind(hid)
         .bind(b.role)
         .bind(uid)
+        .bind(duration)
+        .bind(starts_at)
         .execute(&st.db)
         .await?;
     Ok((StatusCode::CREATED, Json(json!({ "token": token, "expires_in_days": 7 }))))
@@ -396,27 +512,55 @@ struct AcceptReq {
 async fn accept_invite(State(st): State<AppState>, AuthUser(uid): AuthUser, Json(b): Json<AcceptReq>) -> ApiResult<Json<Value>> {
     let mut tx = st.db.begin().await?;
     // Dùng 1 lần, nguyên tử.
-    let row: Option<(Uuid, String)> = sqlx::query_as(
+    let row: Option<(Uuid, String, Option<i32>, Option<DateTime<Utc>>)> = sqlx::query_as(
         "UPDATE home_invites SET used_at = now()
          WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
-         RETURNING home_id, role",
+         RETURNING home_id, role, duration_hours, starts_at",
     )
     .bind(auth::hash_token(b.token.trim()))
     .fetch_optional(&mut *tx)
     .await?;
-    let (home_id, role) = row.ok_or_else(|| ApiError::BadRequest("invalid or expired invite".into()))?;
-    // Giữ vai trò cao hơn nếu đã là thành viên.
-    sqlx::query(
-        "INSERT INTO home_members (home_id, user_id, role) VALUES ($1,$2,$3)
-         ON CONFLICT (home_id, user_id) DO NOTHING",
-    )
-    .bind(home_id)
-    .bind(uid)
-    .bind(&role)
-    .execute(&mut *tx)
-    .await?;
+    let (home_id, role, duration, starts_at) = row.ok_or_else(|| ApiError::BadRequest("invalid or expired invite".into()))?;
+    let mut window: Option<(DateTime<Utc>, DateTime<Utc>)> = None;
+    if role == "renter" {
+        // Cửa sổ bắt đầu từ giờ đã hẹn (nếu còn ở tương lai) hoặc ngay khi chấp nhận, kéo dài `duration` giờ.
+        let hours = duration.ok_or_else(|| ApiError::BadRequest("invalid invite".into()))?;
+        let from = starts_at.filter(|t| *t > Utc::now()).unwrap_or_else(Utc::now);
+        let until = from + chrono::Duration::hours(hours as i64);
+        // Đã là thành viên chính thức (không phải khách thuê) thì KHÔNG hạ quyền; đã là khách thuê thì đặt lại cửa sổ.
+        let n = sqlx::query(
+            "INSERT INTO home_members (home_id, user_id, role, valid_from, valid_until, duration_hours) VALUES ($1,$2,'renter',$3,$4,$5)
+             ON CONFLICT (home_id, user_id) DO UPDATE SET valid_from = EXCLUDED.valid_from, valid_until = EXCLUDED.valid_until, duration_hours = EXCLUDED.duration_hours
+             WHERE home_members.role = 'renter'",
+        )
+        .bind(home_id)
+        .bind(uid)
+        .bind(from)
+        .bind(until)
+        .bind(hours)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if n == 0 {
+            return Err(ApiError::Conflict("already a member of this home".into()));
+        }
+        window = Some((from, until));
+    } else {
+        // Giữ vai trò cao hơn nếu đã là thành viên; riêng khách thuê được nâng lên vai trò mới.
+        sqlx::query(
+            "INSERT INTO home_members (home_id, user_id, role) VALUES ($1,$2,$3)
+             ON CONFLICT (home_id, user_id) DO UPDATE SET role = EXCLUDED.role, valid_from = NULL, valid_until = NULL, duration_hours = NULL
+             WHERE home_members.role = 'renter'",
+        )
+        .bind(home_id)
+        .bind(uid)
+        .bind(&role)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
-    Ok(Json(json!({ "home_id": home_id, "role": role })))
+    st.hub.publish(home_id, client_ws::ACCESS_CHECK.to_owned());
+    Ok(Json(json!({ "home_id": home_id, "role": role, "valid_from": window.map(|w| w.0), "valid_until": window.map(|w| w.1) })))
 }
 
 // ───────────────────────── gateways ─────────────────────────
@@ -697,7 +841,7 @@ pub(crate) fn validate_command(p: &Value) -> ApiResult<()> {
     let obj = p.as_object().filter(|o| !o.is_empty() && o.len() <= 8).ok_or_else(|| ApiError::BadRequest("payload must be a non-empty object (<=8 keys)".into()))?;
     for (k, v) in obj {
         // key = <prop> hoặc <prop>_<endpoint> (vd state, state_1, brightness_2, color_temp)
-        let (prop, rest) = ["state", "brightness", "color_temp"]
+        let (prop, rest) = ["state", "brightness", "color_temp", "position"]
             .iter()
             .find_map(|p| k.strip_prefix(p).map(|r| (*p, r)))
             .ok_or_else(|| ApiError::BadRequest(format!("property not allowed: {k}")))?;
@@ -705,8 +849,10 @@ pub(crate) fn validate_command(p: &Value) -> ApiResult<()> {
             return Err(ApiError::BadRequest(format!("property not allowed: {k}")));
         }
         let ok = match prop {
-            "state" => matches!(v.as_str(), Some("ON" | "OFF" | "TOGGLE")),
+            // ON/OFF/TOGGLE cho công tắc/đèn/ổ cắm; OPEN/CLOSE/STOP cho rèm (cover)
+            "state" => matches!(v.as_str(), Some("ON" | "OFF" | "TOGGLE" | "OPEN" | "CLOSE" | "STOP")),
             "brightness" => v.as_u64().map(|n| n <= 254).unwrap_or(false),
+            "position" => v.as_u64().map(|n| n <= 100).unwrap_or(false),
             _ => v.as_u64().map(|n| (1..=1000).contains(&n)).unwrap_or(false),
         };
         if !ok {
@@ -722,8 +868,12 @@ async fn command(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(did):
         .fetch_optional(&st.db)
         .await?
         .ok_or(ApiError::NotFound)?;
-    access::require(&st.db, uid, hid, Role::Member).await?;
+    let role = access::require(&st.db, uid, hid, Role::Renter).await?;
     validate_command(&b.payload)?;
+    // Khách thuê chỉ được bật/tắt (state*), không chỉnh độ sáng, màu hay vị trí rèm.
+    if role == Role::Renter && b.payload.as_object().is_some_and(|o| o.keys().any(|k| !k.starts_with("state"))) {
+        return Err(ApiError::Forbidden);
+    }
 
     let msg = json!({ "type": "set", "friendly_name": fname, "payload": b.payload }).to_string();
     if !st.hub.send_gateway(gw, msg).await {
@@ -824,4 +974,38 @@ async fn matter_remove_fabric(State(st): State<AppState>, AuthUser(uid): AuthUse
     access::require(&st.db, uid, hid, Role::Admin).await?;
     tracing::warn!(home = %hid, user = %uid, fabric = index, "matter controller removed");
     matter_request(&st, hid, json!({ "type": "matter_remove_fabric", "fabric_index": index })).await
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::validate_command;
+    use serde_json::json;
+
+    #[test]
+    fn accepts_switch_cover_and_rejects_the_rest() {
+        for ok in [
+            json!({"state": "ON"}),
+            json!({"state_left": "OFF"}),   // Aqara/Tuya: endpoint left/right
+            json!({"state_l1": "TOGGLE"}),  // Tuya: l1, l2…
+            json!({"state": "OPEN"}),
+            json!({"state": "STOP"}),
+            json!({"position": 0}),
+            json!({"position": 100}),
+            json!({"brightness": 254}),
+        ] {
+            assert!(validate_command(&ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            json!({"position": 101}),
+            json!({"position": -1}),
+            json!({"position": "50"}),
+            json!({"state": "LOCK"}),
+            json!({"state": "on"}),
+            json!({"permit_join": true}),
+            json!({"state_a/b": "ON"}),
+            json!({}),
+        ] {
+            assert!(validate_command(&bad).is_err(), "{bad}");
+        }
+    }
 }

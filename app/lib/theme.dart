@@ -60,14 +60,11 @@ ThemeData buildTheme(Brightness brightness) {
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     ),
-    floatingActionButtonTheme: FloatingActionButtonThemeData(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-    ),
+    floatingActionButtonTheme: FloatingActionButtonThemeData(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18))),
     popupMenuTheme: PopupMenuThemeData(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
-    pageTransitionsTheme: const PageTransitionsTheme(builders: {
-      TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
-      TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-    }),
+    pageTransitionsTheme: const PageTransitionsTheme(
+      builders: {TargetPlatform.android: FadeForwardsPageTransitionsBuilder(), TargetPlatform.iOS: CupertinoPageTransitionsBuilder()},
+    ),
   );
 }
 
@@ -75,10 +72,6 @@ ThemeData buildTheme(Brightness brightness) {
 BoxDecoration brandGradient(BuildContext context) {
   final c = Theme.of(context).colorScheme;
   return BoxDecoration(
-    gradient: LinearGradient(
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
-      colors: [c.primary, Color.lerp(c.primary, const Color(0xFF0B5FA5), .55)!],
-    ),
+    gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [c.primary, Color.lerp(c.primary, const Color(0xFF0B5FA5), .55)!]),
   );
 }

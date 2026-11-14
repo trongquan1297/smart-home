@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "511774696963",
+    "project_id": "msmart-ed122",
+    "storage_bucket": "msmart-ed122.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:511774696963:android:02e938585d4e9afa895036",
+        "android_client_info": {
+          "package_name": "com.newmoon22.msmart"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDp_HBVg3_aGV_VMYi4Lt-DgiPZUE7B8Cs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

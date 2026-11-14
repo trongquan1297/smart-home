@@ -26,13 +26,31 @@ SENSOR_PERIOD = float(os.getenv("SENSOR_PERIOD", "20"))
 PERMIT_SECONDS = int(os.getenv("PERMIT_JOIN_SECONDS", "120"))
 INTERVIEW_SECONDS = float(os.getenv("INTERVIEW_SECONDS", "2"))
 STATE_FILE = os.getenv("SIM_STATE_FILE", "/data/sim_state.json")  # volume: thiết bị ghép trong sim sống qua lần khởi động lại
-NAME_RE = re.compile(r"^[A-Za-z0-9 _.\-]{1,64}$")  # không cho / # + (an toàn cho MQTT topic)
+NAME_RE = re.compile(r"^[\w .\-()]{1,64}$")  # chữ Unicode (có dấu), số, khoảng trắng, _ . - ( ); KHÔNG cho / # + (an toàn cho MQTT topic)
 
 LOCK = threading.RLock()
 
 
 def binary(prop, access=1, on=True, off=False):
     return {"type": "binary", "name": prop, "property": prop, "value_on": on, "value_off": off, "access": access}
+
+
+def numeric(prop, unit=None, access=1, lo=None, hi=None, category=None):
+    e = {"type": "numeric", "name": prop, "property": prop, "access": access}
+    if unit:
+        e["unit"] = unit
+    if lo is not None:
+        e["value_min"], e["value_max"] = lo, hi
+    if category:
+        e["category"] = category
+    return e
+
+
+def cover_expose():
+    """Rèm/cửa cuốn kiểu Zigbee2MQTT: state (OPEN/CLOSE/STOP, chỉ ghi) + position 0..100 (cover.features)."""
+    return {"type": "cover", "features": [
+        {"type": "enum", "name": "state", "property": "state", "values": ["OPEN", "CLOSE", "STOP"], "access": 2},
+        {"type": "numeric", "name": "position", "property": "position", "unit": "%", "value_min": 0, "value_max": 100, "access": 7}]}
 
 
 def switch_expose(prop):
@@ -66,7 +84,54 @@ def make_catalog():
         "exposes": [{"type": "numeric", "name": "battery", "property": "battery", "access": 1, "unit": "%",
                      "value_min": 0, "value_max": 100}, binary("occupancy")],
         "init": {"occupancy": False, "battery": 100}}
+    for m, c in make_vendor_catalog().items():
+        cat[m] = c
     return cat
+
+
+def make_vendor_catalog():
+    """Mẫu Aqara và Tuya (Zigbee). Thuộc tính lấy theo trang thiết bị trên zigbee2mqtt.io; simulator KHÔNG phải
+    Zigbee2MQTT thật nên giá trị khởi tạo/đơn vị chỉ để thử giao diện. `endpoint` left/right → state_left/state_right."""
+    diag = "diagnostic"
+    v = {}
+    v["WSDCGQ11LM"] = {"vendor": "Aqara", "mfr": "LUMI", "desc": "Temperature and humidity sensor", "type": "EndDevice",
+        "exposes": [numeric("battery", "%", 1, 0, 100, diag), numeric("temperature", "°C"), numeric("humidity", "%"),
+                    numeric("pressure", "hPa"), numeric("voltage", "mV", 1, None, None, diag)],
+        "init": {"battery": 100, "temperature": 26.4, "humidity": 62.0, "pressure": 1009.0, "voltage": 3025}}
+    v["RTCGQ11LM"] = {"vendor": "Aqara", "mfr": "LUMI", "desc": "Motion sensor", "type": "EndDevice",
+        "exposes": [numeric("battery", "%", 1, 0, 100, diag), binary("occupancy"), numeric("illuminance", "lx"),
+                    numeric("device_temperature", "°C", 1, None, None, diag), numeric("voltage", "mV", 1, None, None, diag)],
+        "init": {"battery": 100, "occupancy": False, "illuminance": 120, "device_temperature": 27, "voltage": 3010}}
+    v["SJCGQ11LM"] = {"vendor": "Aqara", "mfr": "LUMI", "desc": "Water leak sensor", "type": "EndDevice",
+        "exposes": [numeric("battery", "%", 1, 0, 100, diag), binary("water_leak"), binary("battery_low", 1, True, False),
+                    numeric("voltage", "mV", 1, None, None, diag)],
+        "init": {"battery": 100, "water_leak": False, "battery_low": False, "voltage": 3000}}
+    v["MCCGQ11LM"] = {"vendor": "Aqara", "mfr": "LUMI", "desc": "Door and window sensor", "type": "EndDevice",
+        "exposes": [numeric("battery", "%", 1, 0, 100, diag), binary("contact", on=False, off=True),
+                    numeric("voltage", "mV", 1, None, None, diag)],
+        "init": {"battery": 100, "contact": True, "voltage": 3000}}
+    v["QBKG03LM"] = {"vendor": "Aqara", "mfr": "LUMI", "desc": "Smart wall switch (no neutral, double rocker)", "type": "EndDevice", "mains": True,
+        "exposes": [switch_expose("state_left"), switch_expose("state_right"),
+                    numeric("device_temperature", "°C", 1, None, None, diag)],
+        "init": {"state_left": "OFF", "state_right": "OFF", "device_temperature": 30}}
+    v["ZNCZ12LM"] = {"vendor": "Aqara", "mfr": "LUMI", "desc": "Smart plug US", "type": "Router",
+        "exposes": [switch_expose("state"), numeric("power", "W", 5), numeric("energy", "kWh"), numeric("voltage", "V"),
+                    numeric("current", "A"), numeric("device_temperature", "°C", 1, None, None, diag)],
+        "init": {"state": "OFF", "power": 0.0, "energy": 12.34, "voltage": 220.0, "current": 0.0, "device_temperature": 32}}
+    v["TS0012"] = {"vendor": "Tuya", "mfr": "_TZ3000_sim", "desc": "Smart light switch - 2 gang", "type": "Router",
+        "exposes": [switch_expose("state_left"), switch_expose("state_right")],
+        "init": {"state_left": "OFF", "state_right": "OFF"}}
+    v["TS0201"] = {"vendor": "Tuya", "mfr": "_TZ3000_sim", "desc": "Temperature & humidity sensor with display", "type": "EndDevice",
+        "exposes": [numeric("battery", "%", 1, 0, 100, diag), numeric("temperature", "°C"), numeric("humidity", "%"),
+                    numeric("voltage", "mV", 1, None, None, diag)],
+        "init": {"battery": 100, "temperature": 27.1, "humidity": 58.0, "voltage": 3000}}
+    v["TS011F_plug_1"] = {"vendor": "Tuya", "mfr": "_TZ3000_sim", "desc": "Smart plug (with power monitoring)", "type": "Router",
+        "exposes": [switch_expose("state"), numeric("power", "W"), numeric("current", "A"), numeric("voltage", "V"), numeric("energy", "kWh")],
+        "init": {"state": "OFF", "power": 0.0, "current": 0.0, "voltage": 221.0, "energy": 3.2}}
+    v["TS130F"] = {"vendor": "Tuya", "mfr": "_TZ3000_sim", "desc": "Curtain/blind switch", "type": "Router",
+        "exposes": [cover_expose()],
+        "init": {"position": 100, "moving": "STOP"}}
+    return v
 
 
 CATALOG = make_catalog()
@@ -135,17 +200,17 @@ def bridge_devices():
             "model_id": "ZBDongle-E", "manufacturer": "SONOFF", "endpoints": {}}]
     for i, (name, d) in enumerate(DEVICES.items(), start=1):
         c = CATALOG[d["model"]]
-        battery = c["type"] == "EndDevice"
+        battery = c["type"] == "EndDevice" and not c.get("mains")
         out.append({
             "ieee_address": d["ieee"], "type": c["type"], "network_address": 0x1000 + i,
             "friendly_name": name, "supported": True, "disabled": False,
             "interview_completed": True, "interviewing": False,
             # Giá trị giả lập: Z2M thật báo chuỗi model Zigbee của thiết bị, không phải mã sản phẩm.
-            "model_id": d["model"].replace("ZB-VNM", "ZB"), "manufacturer": "VSmart (sim)",
+            "model_id": d["model"].replace("ZB-VNM", "ZB"), "manufacturer": c.get("mfr", "VSmart (sim)"),
             "power_source": "Battery" if battery else "Mains (single phase)",
             "software_build_id": "sim-1.0", "date_code": "20260101",
             "endpoints": {},
-            "definition": {"model": d["model"], "vendor": "VSmart", "description": c["desc"],
+            "definition": {"model": d["model"], "vendor": c.get("vendor", "VSmart"), "description": c["desc"],
                            "supports_ota": False, "exposes": c["exposes"], "options": []},
         })
     return out
@@ -192,12 +257,24 @@ def apply_set(name, cmd):
         d = DEVICES.get(name)
         if not d:
             raise KeyError("unknown device")
+        st = d["state"]
+        if "position" in st:  # rèm: state OPEN/CLOSE/STOP hoặc position 0..100 (tức thời, không mô phỏng chuyển động)
+            if cmd.get("state") == "OPEN":
+                st["position"] = 100
+            elif cmd.get("state") == "CLOSE":
+                st["position"] = 0
+            if isinstance(cmd.get("position"), (int, float)):
+                st["position"] = max(0, min(100, int(cmd["position"])))
+            st["moving"] = "STOP"
         for k, v in cmd.items():
-            if k.startswith("state") and k in d["state"]:
-                cur = d["state"][k]
-                d["state"][k] = ("OFF" if cur == "ON" else "ON") if v == "TOGGLE" else ("ON" if v == "ON" else "OFF")
-        print("SET", name, cmd, "->", d["state"], flush=True)
-        pub(name, d["state"])
+            if k.startswith("state") and k in st and st[k] in ("ON", "OFF"):
+                st[k] = ("OFF" if st[k] == "ON" else "ON") if v == "TOGGLE" else ("ON" if v == "ON" else "OFF")
+        if "power" in st:  # ổ cắm đo điện: công suất giả lập theo trạng thái
+            on = st.get("state") == "ON"
+            st["power"] = round(random.uniform(40, 90), 1) if on else 0.0
+            st["current"] = round(st["power"] / max(st.get("voltage", 220), 1), 3)
+        print("SET", name, cmd, "->", st, flush=True)
+        pub(name, st)
         save_state()
 
 
@@ -242,7 +319,7 @@ def rename(old, new):
         if old not in DEVICES:
             raise KeyError("unknown device")
         if not NAME_RE.match(new):
-            raise ValueError("tên chỉ gồm chữ, số, khoảng trắng, _ - . (tối đa 64)")
+            raise ValueError("tên chỉ gồm chữ (có dấu), số, khoảng trắng và _ - . ( ) (tối đa 64)")
         if new in DEVICES or new == "bridge":
             raise ValueError("tên đã tồn tại")
         DEVICES[new] = DEVICES.pop(old)
@@ -276,6 +353,8 @@ def trigger(name):
             s["contact"] = not s["contact"]
         elif "occupancy" in s:
             s["occupancy"] = not s["occupancy"]
+        elif "water_leak" in s:
+            s["water_leak"] = not s["water_leak"]
         else:
             raise ValueError("không phải cảm biến")
         pub(name, s)
@@ -288,7 +367,7 @@ def snapshot():
             "permit_join_left": max(0, int(PERMIT["until"] - time.time())),
             "pending": len(PENDING),
             "models": [{"model": m, "desc": c["desc"]} for m, c in CATALOG.items()],
-            "devices": [{"name": n, "ieee": d["ieee"], "model": d["model"], "vendor": "VSmart",
+            "devices": [{"name": n, "ieee": d["ieee"], "model": d["model"], "vendor": CATALOG[d["model"]].get("vendor", "VSmart"),
                          "desc": CATALOG[d["model"]]["desc"], "type": CATALOG[d["model"]]["type"], "state": d["state"]}
                         for n, d in sorted(DEVICES.items())],
         }
@@ -332,6 +411,13 @@ def sensor_loop():
                 elif "occupancy" in s:
                     s["occupancy"] = random.random() < 0.5
                     s["battery"] = max(1, s.get("battery", 100) - random.choice([0, 0, 1]))
+                    if "illuminance" in s:
+                        s["illuminance"] = max(0, int(s["illuminance"] + random.randint(-30, 30)))
+                    pub(name, s)
+                elif "temperature" in s:
+                    s["temperature"] = round(s["temperature"] + random.uniform(-0.4, 0.4), 1)
+                    if "humidity" in s:
+                        s["humidity"] = round(max(20, min(95, s["humidity"] + random.uniform(-1.5, 1.5))), 1)
                     pub(name, s)
             save_state()
 

@@ -104,71 +104,85 @@ class _RoomSheetState extends State<_RoomSheet> {
     return Padding(
       padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(context).viewInsets.bottom),
       child: SingleChildScrollView(
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Row(children: [
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 200),
-              child: Container(
-                key: ValueKey(_kind),
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(16)),
-                child: Icon(_kind.icon, color: cs.onPrimaryContainer),
-              ),
-            ),
-            const SizedBox(width: 14),
-            Text(_editing ? 'Sửa phòng' : 'Phòng mới', style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
-          ]),
-          const SizedBox(height: 18),
-          TextField(
-            controller: _name,
-            autofocus: !_editing,
-            textCapitalization: TextCapitalization.sentences,
-            maxLength: 100,
-            decoration: const InputDecoration(labelText: 'Tên phòng', hintText: 'vd: Phòng khách', counterText: ''),
-            onChanged: (v) {
-              if (!_picked) setState(() => _kind = RoomKind.guess(v));
-            },
-          ),
-          const SizedBox(height: 16),
-          Text('Biểu tượng', style: tt.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 10),
-          LayoutBuilder(builder: (_, c) {
-            const gap = 8.0;
-            final w = (c.maxWidth - gap * 3) / 4; // 4 ô mỗi hàng, vừa khít chiều rộng
-            return Wrap(spacing: gap, runSpacing: gap, children: [
-              for (final k in RoomKind.values)
-                _KindTile(
-                  kind: k,
-                  width: w,
-                  selected: k == _kind,
-                  onTap: () => setState(() {
-                    _kind = k;
-                    _picked = true;
-                  }),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 200),
+                  child: Container(
+                    key: ValueKey(_kind),
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(16)),
+                    child: Icon(_kind.icon, color: cs.onPrimaryContainer),
+                  ),
                 ),
-            ]);
-          }),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: Text(_error!, style: TextStyle(color: cs.error)),
+                const SizedBox(width: 14),
+                Text(_editing ? 'Sửa phòng' : 'Phòng mới', style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+              ],
             ),
-          const SizedBox(height: 20),
-          Row(children: [
-            if (_editing)
-              TextButton.icon(
-                style: TextButton.styleFrom(foregroundColor: cs.error),
-                onPressed: _busy ? null : _delete,
-                icon: const Icon(Icons.delete_outline_rounded),
-                label: const Text('Xoá'),
+            const SizedBox(height: 18),
+            TextField(
+              controller: _name,
+              autofocus: !_editing,
+              textCapitalization: TextCapitalization.sentences,
+              maxLength: 100,
+              decoration: const InputDecoration(labelText: 'Tên phòng', hintText: 'vd: Phòng khách', counterText: ''),
+              onChanged: (v) {
+                if (!_picked) setState(() => _kind = RoomKind.guess(v));
+              },
+            ),
+            const SizedBox(height: 16),
+            Text('Biểu tượng', style: tt.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 10),
+            LayoutBuilder(
+              builder: (_, c) {
+                const gap = 8.0;
+                final w = (c.maxWidth - gap * 3) / 4; // 4 ô mỗi hàng, vừa khít chiều rộng
+                return Wrap(
+                  spacing: gap,
+                  runSpacing: gap,
+                  children: [
+                    for (final k in RoomKind.values)
+                      _KindTile(
+                        kind: k,
+                        width: w,
+                        selected: k == _kind,
+                        onTap: () => setState(() {
+                          _kind = k;
+                          _picked = true;
+                        }),
+                      ),
+                  ],
+                );
+              },
+            ),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(_error!, style: TextStyle(color: cs.error)),
               ),
-            const Spacer(),
-            TextButton(onPressed: _busy ? null : () => Navigator.pop(context), child: const Text('Huỷ')),
-            const SizedBox(width: 8),
-            FilledButton(onPressed: _busy ? null : _save, child: Text(_editing ? 'Lưu' : 'Tạo phòng')),
-          ]),
-        ]),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                if (_editing)
+                  TextButton.icon(
+                    style: TextButton.styleFrom(foregroundColor: cs.error),
+                    onPressed: _busy ? null : _delete,
+                    icon: const Icon(Icons.delete_outline_rounded),
+                    label: const Text('Xoá'),
+                  ),
+                const Spacer(),
+                TextButton(onPressed: _busy ? null : () => Navigator.pop(context), child: const Text('Huỷ')),
+                const SizedBox(width: 8),
+                FilledButton(onPressed: _busy ? null : _save, child: Text(_editing ? 'Lưu' : 'Tạo phòng')),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -197,19 +211,21 @@ class _KindTile extends StatelessWidget {
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 2),
-          child: Column(children: [
-            Icon(kind.icon, color: selected ? cs.onPrimaryContainer : cs.onSurfaceVariant),
-            const SizedBox(height: 4),
-            Text(
-              kind.label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: selected ? cs.onPrimaryContainer : cs.onSurfaceVariant,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  ),
-            ),
-          ]),
+          child: Column(
+            children: [
+              Icon(kind.icon, color: selected ? cs.onPrimaryContainer : cs.onSurfaceVariant),
+              const SizedBox(height: 4),
+              Text(
+                kind.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: selected ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

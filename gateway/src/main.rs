@@ -34,6 +34,9 @@ fn env_or(k: &str, d: &str) -> String {
     std::env::var(k).unwrap_or_else(|_| d.to_string())
 }
 
+/// Gói MQTT lớn nhất nhận từ broker (4 MiB đủ cho hàng trăm thiết bị).
+const MQTT_MAX_PACKET: usize = 4 * 1024 * 1024;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -47,8 +50,13 @@ async fn main() -> anyhow::Result<()> {
     let token = std::env::var("GATEWAY_TOKEN").unwrap_or_default();
     anyhow::ensure!(!token.is_empty(), "GATEWAY_TOKEN is required (create one via POST /v1/homes/:id/gateways)");
 
-    let mut opts = MqttOptions::new("smart-gateway", host, port);
+    // client id cố định theo gateway; nếu hai gateway cùng dùng một broker (chỉ gặp khi thử nghiệm) phải khác nhau, nếu không broker đá nhau liên tục
+    let client_id = env_or("MQTT_CLIENT_ID", "smart-gateway");
+    let mut opts = MqttOptions::new(client_id, host, port);
     opts.set_keep_alive(Duration::from_secs(30));
+    // Mặc định rumqttc chỉ nhận gói tới 10 KB; bản tin retained `bridge/devices` của Zigbee2MQTT lớn dần theo số thiết bị
+    // (mỗi thiết bị kèm cả cây exposes), vượt ngưỡng đó là gateway bị ngắt và kết nối lại vô hạn.
+    opts.set_max_packet_size(MQTT_MAX_PACKET, 64 * 1024);
     // Mosquitto yêu cầu đăng nhập (xem infra/mosquitto/acl.conf).
     if let (Ok(user), Ok(pass)) = (std::env::var("MQTT_USER"), std::env::var("MQTT_PASSWORD")) {
         if !user.is_empty() {
@@ -216,5 +224,19 @@ async fn handle_cmd(text: &str, base: &str, mqtt: &AsyncClient, reply_tx: &mpsc:
             });
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_name;
+
+    #[test]
+    fn unicode_and_spaces_allowed_but_mqtt_separators_rejected() {
+        assert!(safe_name("Đèn phòng khách"));
+        assert!(safe_name("Công tắc (tầng 2)"));
+        for bad in ["", "a/b", "a#", "a+b", "bridge", "x\0y"] {
+            assert!(!safe_name(bad), "{bad:?}");
+        }
     }
 }
