@@ -148,6 +148,17 @@ pub async fn scene_auto_ran(st: &AppState, home: Uuid, scene: Uuid, why: AutoRun
         Err(e) => return tracing::warn!(%home, "scene auto notification: {e}"),
     };
     st.hub.publish(home, json!({"type": "alert", "id": id, "kind": kind, "title": title, "body": body, "scene_id": scene, "created_at": at}).to_string());
+    // Loa Cast (nếu ngữ cảnh có chọn loa): chỉ đọc khi chạy thành công.
+    if ok {
+        let sp: Option<(Vec<Uuid>, Option<String>)> = sqlx::query_as("SELECT speaker_ids, speak_text FROM scenes WHERE id = $1").bind(scene).fetch_optional(&st.db).await.unwrap_or(None);
+        if let Some((ids, custom)) = sp.filter(|(ids, _)| !ids.is_empty()) {
+            let text = custom.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| match &why {
+                AutoRun::Schedule(_) => format!("Đã chuyển sang chế độ {name}"),
+                AutoRun::Leave => format!("Mọi người đã rời nhà. Đã chuyển sang chế độ {name}"),
+            });
+            let _ = crate::speak::say(st, home, &ids, &text).await;
+        }
+    }
     let st2 = st.clone();
     tokio::spawn(async move {
         push::notify_home(&st2, home, &title, &body, json!({"kind": kind, "home_id": home, "scene_id": scene})).await;

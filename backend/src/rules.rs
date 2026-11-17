@@ -36,9 +36,12 @@ pub struct RuleOut {
     source_state: Option<String>,
     target_state: Option<String>,
     enabled: bool,
+    /// Loa Cast đọc thông báo khi luật này chạy (rỗng = im lặng) và câu tuỳ chỉnh (null = câu tự sinh).
+    speaker_ids: Vec<Uuid>,
+    speak_text: Option<String>,
 }
 
-const COLS: &str = "id, home_id, device_id, key, kind, delay_s, source_device_id, source_key, source_state, target_state, enabled";
+const COLS: &str = "id, home_id, device_id, key, kind, delay_s, source_device_id, source_key, source_state, target_state, enabled, speaker_ids, speak_text";
 
 #[derive(Deserialize)]
 pub struct RuleReq {
@@ -51,6 +54,8 @@ pub struct RuleReq {
     source_state: Option<String>,
     target_state: Option<String>,
     enabled: Option<bool>,
+    speaker_ids: Option<Vec<Uuid>>,
+    speak_text: Option<String>,
 }
 
 /// `state` hoặc `state_<gang>` (cùng quy tắc với lệnh điều khiển).
@@ -90,6 +95,8 @@ pub async fn create(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(hi
         return Err(bad("device has no such switch"));
     }
     let kind = b.kind.as_deref().ok_or_else(|| bad("kind required"))?;
+    let speakers = crate::speak::validate_speakers(&st, hid, b.speaker_ids.as_deref().unwrap_or(&[])).await?;
+    let speak_text = crate::speak::clean_text(b.speak_text.as_deref())?.filter(|t| !t.is_empty());
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM device_rules WHERE home_id = $1").bind(hid).fetch_one(&st.db).await?;
     if n >= MAX_PER_HOME {
         return Err(bad("too many rules for this home"));
@@ -134,6 +141,11 @@ pub async fn create(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(hi
         }
         _ => return Err(bad("kind must be auto_off|auto_on|link")),
     };
+    let row: RuleOut = if speakers.is_empty() && speak_text.is_none() {
+        row
+    } else {
+        sqlx::query_as(&format!("UPDATE device_rules SET speaker_ids = $2, speak_text = $3 WHERE id = $1 RETURNING {COLS}")).bind(row.id).bind(&speakers).bind(&speak_text).fetch_one(&st.db).await?
+    };
     Ok((StatusCode::CREATED, Json(row)))
 }
 
@@ -151,11 +163,18 @@ pub async fn update(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(id
     if b.source_state.as_deref().is_some_and(|s| !onoff(s)) || b.target_state.as_deref().is_some_and(|s| !onoff(s)) {
         return Err(bad("state must be ON|OFF"));
     }
+    let speakers = match &b.speaker_ids {
+        Some(ids) => Some(crate::speak::validate_speakers(&st, hid, ids).await?),
+        None => None,
+    };
+    let speak_text = crate::speak::clean_text(b.speak_text.as_deref())?;
     let row: RuleOut = sqlx::query_as(&format!(
         "UPDATE device_rules SET delay_s = CASE WHEN kind <> 'link' THEN COALESCE($2, delay_s) ELSE delay_s END,
            source_state = CASE WHEN kind = 'link' THEN COALESCE($3, source_state) ELSE source_state END,
            target_state = CASE WHEN kind = 'link' THEN COALESCE($4, target_state) ELSE target_state END,
-           enabled = COALESCE($5, enabled)
+           enabled = COALESCE($5, enabled),
+           speaker_ids = COALESCE($6, speaker_ids),
+           speak_text = CASE WHEN $7::text IS NULL THEN speak_text ELSE NULLIF($7, '') END
          WHERE id = $1 RETURNING {COLS}"
     ))
     .bind(id)
@@ -163,6 +182,8 @@ pub async fn update(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(id
     .bind(&b.source_state)
     .bind(&b.target_state)
     .bind(b.enabled)
+    .bind(speakers)
+    .bind(speak_text)
     .fetch_one(&st.db)
     .await?;
     // Đổi cấu hình thì bỏ hẹn giờ đang chờ (tính lại từ lần chuyển trạng thái kế tiếp).
@@ -234,8 +255,8 @@ async fn handle(st: &AppState, home: Uuid, device: Uuid, key: &str, state: &'sta
         st.rule_cmds.remove(&ck);
         return Ok(());
     }
-    let links: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT device_id, key, target_state FROM device_rules
+    let links: Vec<(Uuid, String, String, Vec<Uuid>, Option<String>)> = sqlx::query_as(
+        "SELECT device_id, key, target_state, speaker_ids, speak_text FROM device_rules
           WHERE kind = 'link' AND enabled AND home_id = $1 AND source_device_id = $2 AND source_key = $3 AND source_state = $4",
     )
     .bind(home)
@@ -244,24 +265,49 @@ async fn handle(st: &AppState, home: Uuid, device: Uuid, key: &str, state: &'sta
     .bind(state)
     .fetch_all(&st.db)
     .await?;
-    for (target, tkey, tstate) in links {
-        send(st, home, target, &tkey, &tstate).await;
+    for (target, tkey, tstate, speakers, custom) in links {
+        if send(st, home, target, &tkey, &tstate).await == Sent::Yes && !speakers.is_empty() {
+            let text = match custom.filter(|t| !t.trim().is_empty()) {
+                Some(t) => t,
+                None => format!("{} đã {} theo {}", gang_name(st, target, &tkey).await, if tstate == "ON" { "bật" } else { "tắt" }, gang_name(st, device, key).await),
+            };
+            let _ = crate::speak::say(st, home, &speakers, &text).await;
+        }
     }
     Ok(())
 }
 
-/// Gửi một lệnh ON/OFF cho một gang. Bỏ qua nếu gang đã ở trạng thái đó. Trả true nếu đã gửi (hoặc không cần gửi).
-async fn send(st: &AppState, home: Uuid, device: Uuid, key: &str, state: &str) -> bool {
+#[derive(PartialEq, Eq)]
+enum Sent {
+    /// Đã gửi lệnh xuống gateway.
+    Yes,
+    /// Gang đã ở trạng thái đích, không cần gửi (và không đọc loa).
+    Already,
+    No,
+}
+
+/// Tên đọc ra loa: tên thiết bị, kèm tên gang nếu người dùng đã đặt.
+async fn gang_name(st: &AppState, device: Uuid, key: &str) -> String {
+    let r: Option<(String, Option<String>)> = sqlx::query_as("SELECT name, channels->$2->>'name' FROM devices WHERE id = $1").bind(device).bind(key).fetch_optional(&st.db).await.unwrap_or(None);
+    match r {
+        Some((n, Some(g))) if !g.trim().is_empty() => format!("{n} {}", g.trim()),
+        Some((n, _)) => n,
+        None => "thiết bị".into(),
+    }
+}
+
+/// Gửi một lệnh ON/OFF cho một gang. Bỏ qua nếu gang đã ở trạng thái đó.
+async fn send(st: &AppState, home: Uuid, device: Uuid, key: &str, state: &str) -> Sent {
     let cur: Option<String> = sqlx::query_scalar("SELECT state->>$2 FROM devices WHERE id = $1").bind(device).bind(key).fetch_optional(&st.db).await.unwrap_or(None).flatten();
     if cur.as_deref() == Some(state) {
-        return true;
+        return Sent::Already;
     }
     let actions = json!([{ "device_id": device, "payload": { key: state } }]);
     let ok = automation::execute(st, home, &actions, None).await.map(|o| o.sent > 0).unwrap_or(false);
     if ok {
         st.rule_cmds.insert((device, key.to_string()), (state.to_string(), Instant::now()));
     }
-    ok
+    if ok { Sent::Yes } else { Sent::No }
 }
 
 /// Vòng lặp 1 giây: chạy các hẹn giờ đã đến hạn.
@@ -276,13 +322,23 @@ pub async fn runner(st: AppState) {
 }
 
 async fn run_due(st: &AppState) -> ApiResult<()> {
-    let rows: Vec<(Uuid, Uuid, Uuid, String, String, i64)> = sqlx::query_as(
-        "SELECT rule_id, home_id, device_id, key, state, EXTRACT(EPOCH FROM now() - due_at)::bigint FROM pending_actions WHERE due_at <= now() ORDER BY due_at LIMIT 50",
+    let rows: Vec<(Uuid, Uuid, Uuid, String, String, i64, String, Vec<Uuid>, Option<String>)> = sqlx::query_as(
+        "SELECT p.rule_id, p.home_id, p.device_id, p.key, p.state, EXTRACT(EPOCH FROM now() - p.due_at)::bigint, r.kind, r.speaker_ids, r.speak_text
+           FROM pending_actions p JOIN device_rules r ON r.id = p.rule_id WHERE p.due_at <= now() ORDER BY p.due_at LIMIT 50",
     )
     .fetch_all(&st.db)
     .await?;
-    for (rule, home, device, key, state, late) in rows {
-        let sent = send(st, home, device, &key, &state).await;
+    for (rule, home, device, key, state, late, kind, speakers, custom) in rows {
+        let res = send(st, home, device, &key, &state).await;
+        let sent = res != Sent::No;
+        if res == Sent::Yes && !speakers.is_empty() {
+            let text = match custom.filter(|t| !t.trim().is_empty()) {
+                Some(t) => t,
+                None if kind == "auto_on" => format!("Đã tự động bật lại {}", gang_name(st, device, &key).await),
+                None => format!("Đã tự động tắt {}", gang_name(st, device, &key).await),
+            };
+            let _ = crate::speak::say(st, home, &speakers, &text).await;
+        }
         if sent || late > GRACE_SECS {
             sqlx::query("DELETE FROM pending_actions WHERE rule_id = $1").bind(rule).execute(&st.db).await?;
             if !sent {

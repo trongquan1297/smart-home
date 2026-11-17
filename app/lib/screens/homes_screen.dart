@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../app_model.dart';
+import '../widgets/ui.dart';
 import '../models.dart';
 
 class HomesScreen extends StatelessWidget {
@@ -46,7 +47,7 @@ class HomesScreen extends StatelessWidget {
     await showDialog<void>(
       context: c,
       builder: (d) => AlertDialog(
-        icon: Icon(waiting ? Icons.hourglass_top_rounded : Icons.check_circle_rounded, color: Theme.of(d).colorScheme.primary, size: 32),
+        icon: IconBadge(waiting ? Icons.hourglass_top_rounded : Icons.check_circle_rounded, colors: waiting ? Vivid.timer : Vivid.power, size: 52),
         title: Text(waiting ? 'Đã nhận mã, đang đợi check-in' : 'Đã nhận quyền truy cập'),
         content: Text(
           waiting
@@ -81,7 +82,31 @@ class HomesScreen extends StatelessWidget {
           slivers: [
             SliverAppBar.large(
               title: Text(name.isEmpty ? 'Căn hộ của tôi' : 'Xin chào, $name'),
-              actions: [IconButton(icon: const Icon(Icons.logout_rounded), tooltip: 'Đăng xuất', onPressed: m.logout)],
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.group_add_rounded),
+                  tooltip: 'Nhập mã mời',
+                  onPressed: () async {
+                    final t = await _ask(context, 'Nhập mã mời', 'Mã mời');
+                    if (t != null && t.isNotEmpty && context.mounted) {
+                      await _guard(context, () async {
+                        final r = await m.api.acceptInvite(t);
+                        await m.refreshHomes();
+                        if (context.mounted) await _afterAccept(context, r);
+                      });
+                    }
+                  },
+                ),
+                HeaderAction(
+                  icon: Icons.add_home_rounded,
+                  tooltip: 'Căn hộ mới',
+                  onPressed: () async {
+                    final n = await _ask(context, 'Căn hộ mới', 'Tên căn hộ');
+                    if (n != null && n.isNotEmpty && context.mounted) await _guard(context, () => m.createFirstHome(n));
+                  },
+                ),
+                IconButton(icon: const Icon(Icons.logout_rounded), tooltip: 'Đăng xuất', onPressed: m.logout),
+              ],
             ),
             if (m.notice != null)
               SliverPadding(
@@ -126,15 +151,7 @@ class HomesScreen extends StatelessWidget {
                           padding: const EdgeInsets.all(16),
                           child: Row(
                             children: [
-                              Container(
-                                width: 56,
-                                height: 56,
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(18),
-                                  gradient: LinearGradient(colors: [cs.primary, cs.tertiary]),
-                                ),
-                                child: Icon(Icons.apartment_rounded, color: cs.onPrimary, size: 28),
-                              ),
+                              IconBadge(Icons.apartment_rounded, colors: h.isRenter ? Vivid.leave : const [Color(0xFF0EA5E9), Color(0xFF60A5FA)], size: 56),
                               const SizedBox(width: 16),
                               Expanded(
                                 child: Column(
@@ -142,13 +159,14 @@ class HomesScreen extends StatelessWidget {
                                   children: [
                                     Text(h.name, style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
                                     const SizedBox(height: 6),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                                      decoration: BoxDecoration(color: cs.secondaryContainer, borderRadius: BorderRadius.circular(20)),
-                                      child: Text(
-                                        h.isRenter && h.accessUntil != null ? '${_roleLabel(h.role)} · đến ${fmtDateTime(h.accessUntil!)}' : _roleLabel(h.role),
-                                        style: tt.labelSmall?.copyWith(color: cs.onSecondaryContainer, fontWeight: FontWeight.w600),
-                                      ),
+                                    Wrap(
+                                      spacing: 6,
+                                      runSpacing: 4,
+                                      children: [
+                                        Pill(Icons.badge_rounded, _roleLabel(h.role), color: cs.primary),
+                                        if (h.isRenter && h.accessUntil != null)
+                                          Pill(Icons.timer_rounded, fmtDateTime(h.accessUntil!), color: Vivid.timer.last),
+                                      ],
                                     ),
                                   ],
                                 ),
@@ -173,40 +191,6 @@ class HomesScreen extends StatelessWidget {
           ],
         ),
       ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          FloatingActionButton.small(
-            heroTag: 'join',
-            tooltip: 'Nhập mã mời',
-            backgroundColor: cs.secondaryContainer,
-            foregroundColor: cs.onSecondaryContainer,
-            onPressed: () async {
-              final t = await _ask(context, 'Nhập mã mời', 'Mã mời');
-              if (t != null && t.isNotEmpty && context.mounted) {
-                await _guard(context, () async {
-                  final r = await m.api.acceptInvite(t);
-                  await m.refreshHomes();
-                  if (context.mounted) await _afterAccept(context, r);
-                });
-              }
-            },
-            child: const Icon(Icons.group_add_rounded),
-          ),
-          const SizedBox(height: 12),
-          FloatingActionButton.extended(
-            heroTag: 'new',
-            icon: const Icon(Icons.add_rounded),
-            label: const Text('Căn hộ mới'),
-            onPressed: () async {
-              final n = await _ask(context, 'Căn hộ mới', 'Tên căn hộ');
-              if (n != null && n.isNotEmpty && context.mounted) await _guard(context, () => m.createFirstHome(n));
-            },
-          ),
-        ],
-      ),
     );
   }
 }
@@ -217,31 +201,9 @@ class _EmptyState extends StatelessWidget {
   const _EmptyState({required this.icon, required this.title, required this.message});
 
   @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.all(32),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            width: 96,
-            height: 96,
-            decoration: BoxDecoration(color: cs.primaryContainer.withValues(alpha: .6), shape: BoxShape.circle),
-            child: Icon(icon, size: 44, color: cs.primary),
-          ),
-          const SizedBox(height: 20),
-          Text(title, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 8),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: TextStyle(color: cs.onSurfaceVariant),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Center(
+    child: EmptyState(icon: icon, colors: const [Color(0xFF0EA5E9), Color(0xFF60A5FA)], title: title, info: message),
+  );
 }
 
 /// Khách thuê đã nhập mã nhưng chưa tới giờ check-in: thẻ đếm ngược, chưa vào được căn hộ.
@@ -267,12 +229,7 @@ class _WaitingCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Container(
-                    width: 56,
-                    height: 56,
-                    decoration: BoxDecoration(borderRadius: BorderRadius.circular(18), color: cs.tertiaryContainer),
-                    child: Icon(Icons.hourglass_top_rounded, color: cs.onTertiaryContainer, size: 28),
-                  ),
+                  const IconBadge(Icons.hourglass_top_rounded, colors: Vivid.timer, size: 56),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Column(

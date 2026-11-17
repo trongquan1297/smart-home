@@ -74,6 +74,10 @@ services:
       MATTERBRIDGE_PASSWORD: ${MATTERBRIDGE_PASSWORD:-}
       CLOUD_WS_URL: ${CLOUD_WS_URL:?set CLOUD_WS_URL, vd wss://api.example.com/gw/ws}
       GATEWAY_TOKEN: ${GATEWAY_TOKEN:?set GATEWAY_TOKEN}
+      # Thông báo giọng nói qua loa Google Cast: mạng host để quét mDNS; loa tải âm thanh từ cổng HTTP này của Pi (mở trong tường lửa LAN).
+      # CAST_HTTP_PORT: "8765"
+      # CAST_ADVERTISE_HOST: 192.168.1.10   # chỉ khi Pi có nhiều giao diện mạng và tự chọn sai địa chỉ
+      # TTS_URL_TEMPLATE: https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=vi&q={text}
       RUST_LOG: info
 
 volumes:

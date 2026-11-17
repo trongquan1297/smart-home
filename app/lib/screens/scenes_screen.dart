@@ -8,6 +8,8 @@ import '../models.dart';
 import '../geofence_service.dart';
 import '../notifier.dart';
 import '../push_service.dart';
+import '../widgets/ui.dart';
+import 'speak_picker.dart';
 
 String _hhmm(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
@@ -59,10 +61,8 @@ class _ScenesScreenState extends State<ScenesScreen> {
   }
 
   Future<void> _edit(Scene? s) async {
-    final saved = await showModalBottomSheet<bool>(
+    final saved = await showCenterSheet<bool>(
       context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
       builder: (_) => _SceneSheet(model: context.read<AppModel>(), scene: s),
     );
     if (saved == true) _load();
@@ -75,10 +75,13 @@ class _ScenesScreenState extends State<ScenesScreen> {
     final cs = Theme.of(context).colorScheme;
     final scenes = _scenes;
     return Scaffold(
-      appBar: AppBar(title: const Text('Ngữ cảnh')),
-      floatingActionButton: home.isAdmin
-          ? FloatingActionButton.extended(onPressed: () => _edit(null), icon: const Icon(Icons.add_rounded), label: const Text('Tạo ngữ cảnh'))
-          : null,
+      appBar: AppBar(
+        title: const Text('Ngữ cảnh'),
+        actions: [
+          if (home.isAdmin) HeaderAction(icon: Icons.add_rounded, tooltip: 'Tạo ngữ cảnh', onPressed: () => _edit(null)),
+          const SizedBox(width: 8),
+        ],
+      ),
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
@@ -99,23 +102,13 @@ class _ScenesScreenState extends State<ScenesScreen> {
                 child: Center(child: CircularProgressIndicator()),
               ),
             if (scenes != null && scenes.isEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 64, 24, 0),
-                child: Column(
-                  children: [
-                    Icon(Icons.auto_awesome_rounded, size: 56, color: cs.primary.withValues(alpha: .6)),
-                    const SizedBox(height: 16),
-                    Text('Chưa có ngữ cảnh', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 8),
-                    Text(
-                      home.isAdmin
-                          ? 'Tạo ngữ cảnh như "Đi ngủ" (tắt hết đèn) hay "Về nhà" (bật đèn phòng khách), rồi đặt giờ để tự kích hoạt.'
-                          : 'Quản trị căn hộ có thể tạo ngữ cảnh để bật/tắt nhiều thiết bị cùng lúc.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: cs.onSurfaceVariant),
-                    ),
-                  ],
-                ),
+              EmptyState(
+                icon: Icons.auto_awesome_rounded,
+                colors: Vivid.scene,
+                title: 'Chưa có ngữ cảnh',
+                info: home.isAdmin
+                    ? 'Ngữ cảnh bật/tắt nhiều thiết bị bằng một chạm, ví dụ "Đi ngủ" tắt hết đèn hay "Về nhà" bật đèn phòng khách. Có thể đặt giờ để tự chạy hoặc tự chạy khi mọi người rời nhà.'
+                    : 'Quản trị căn hộ có thể tạo ngữ cảnh để bật/tắt nhiều thiết bị cùng lúc.',
               ),
             for (final s in scenes ?? const <Scene>[])
               Padding(
@@ -173,12 +166,7 @@ class _SceneCard extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           child: Row(
             children: [
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(16)),
-                child: Icon(scene.kind.icon, color: cs.onPrimaryContainer),
-              ),
+              IconBadge(scene.kind.icon, colors: sceneColors(scene.kind.id), size: 52),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -187,81 +175,26 @@ class _SceneCard extends StatelessWidget {
                     Row(
                       children: [
                         Flexible(
-                          child: Text(
-                            scene.name,
-                            style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                          child: Text(scene.name, style: tt.titleMedium, maxLines: 1, overflow: TextOverflow.ellipsis),
                         ),
-                        if (scene.active) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                            decoration: BoxDecoration(color: cs.primary, borderRadius: BorderRadius.circular(10)),
-                            child: Text(
-                              'Đang bật',
-                              style: tt.labelSmall?.copyWith(color: cs.onPrimary, fontWeight: FontWeight.w700),
-                            ),
-                          ),
-                        ],
+                        if (scene.active) ...[const SizedBox(width: 8), Pill(Icons.bolt_rounded, 'Đang bật', color: cs.primary)],
                       ],
                     ),
-                    const SizedBox(height: 2),
-                    Text('${scene.actions.length} thiết bị', style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
-                    if (scene.alertDevices.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Row(
-                          children: [
-                            Icon(Icons.notifications_active_rounded, size: 16, color: scene.active ? cs.primary : cs.onSurfaceVariant),
-                            const SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                'Cảnh báo ${scene.alertDevices.length} cảm biến',
-                                style: tt.bodySmall?.copyWith(color: scene.active ? cs.primary : cs.onSurfaceVariant, fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    if (scene.autoLeave)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Row(
-                          children: [
-                            Icon(Icons.directions_walk_rounded, size: 16, color: cs.primary),
-                            const SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                'Tự chạy khi rời nhà',
-                                style: tt.bodySmall?.copyWith(color: cs.primary, fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
                     const SizedBox(height: 6),
-                    if (scene.autoEnabled && scene.autoTime != null)
-                      Row(
-                        children: [
-                          Icon(Icons.schedule_rounded, size: 16, color: cs.primary),
-                          const SizedBox(width: 4),
-                          Flexible(
-                            child: Text(
-                              'Tự động ${scene.autoTime} · ${Scene.daysLabel(scene.autoDays)}',
-                              style: tt.bodySmall?.copyWith(color: cs.primary, fontWeight: FontWeight.w600),
-                            ),
-                          ),
-                        ],
-                      )
-                    else
-                      Text('Chạy thủ công', style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
-                    if (status != null && scene.autoEnabled)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(status, style: tt.bodySmall?.copyWith(color: bad ? cs.error : cs.onSurfaceVariant)),
-                      ),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: [
+                        Pill(Icons.toggle_on_rounded, '${scene.actions.length}'),
+                        if (scene.autoEnabled && scene.autoTime != null)
+                          Pill(Icons.schedule_rounded, '${scene.autoTime} · ${Scene.daysLabel(scene.autoDays)}', color: Vivid.schedule.first),
+                        if (scene.autoLeave) Pill(Icons.directions_walk_rounded, 'Rời nhà', color: Vivid.leave.first),
+                        if (scene.alertDevices.isNotEmpty) Pill(Icons.notifications_active_rounded, '${scene.alertDevices.length}', color: Vivid.alert.first),
+                        if (scene.speakerIds.isNotEmpty) Pill(Icons.record_voice_over_rounded, '${scene.speakerIds.length}', color: Vivid.speak.first),
+                        if (status != null && (scene.autoEnabled || scene.autoLeave))
+                          Pill(bad ? Icons.error_outline_rounded : Icons.check_circle_outline_rounded, status, color: bad ? cs.error : null),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -299,6 +232,8 @@ class _SceneSheetState extends State<_SceneSheet> {
   late final Set<String> _alerts = {...?widget.scene?.alertDevices}; // cảm biến được báo khi ngữ cảnh này đang bật
   late bool _auto = widget.scene?.autoEnabled ?? false;
   late bool _leave = widget.scene?.autoLeave ?? false; // tự chạy khi người cuối cùng rời nhà
+  late final Set<String> _speakers = {...?widget.scene?.speakerIds}; // loa Cast đọc khi ngữ cảnh TỰ chạy
+  late final TextEditingController _speakText = TextEditingController(text: widget.scene?.speakText ?? '');
   late int _radius = widget.model.home?.geoRadius ?? 150;
   bool _locBusy = false;
   late TimeOfDay _time = _parse(widget.scene?.autoTime) ?? const TimeOfDay(hour: 18, minute: 0);
@@ -352,6 +287,9 @@ class _SceneSheetState extends State<_SceneSheet> {
       'auto_days': (_days.toList()..sort()),
       'alert_devices': alerts,
       'auto_leave': _leave,
+      // Chỉ giữ loa còn tồn tại (loa đã xoá sẽ bị máy chủ từ chối); câu rỗng = xoá câu tuỳ chỉnh.
+      'speaker_ids': _speakers.where(m.speakers.map((x) => x.id).toSet().contains).toList(),
+      'speak_text': _speakText.text.trim(),
     };
     try {
       // Bật cảnh báo thì xin quyền hiển thị thông báo đúng lúc này (không hỏi khi mở app).
@@ -378,16 +316,15 @@ class _SceneSheetState extends State<_SceneSheet> {
   /// Chọn cảm biến hiện diện / cửa sẽ báo khi ngữ cảnh này đang bật.
   List<Widget> _alertSection(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
     final sensors = widget.model.devices.where((d) => d.isAlertSensor).toList();
     return [
-      Text('Cảnh báo cảm biến', style: tt.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-      const SizedBox(height: 2),
-      Text(
-        'Khi ngữ cảnh này đang bật (chạy bằng tay hoặc theo giờ), báo cho thành viên mỗi lần cảm biến được kích hoạt.',
-        style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+      const SectionHeader(
+        icon: Icons.notifications_active_rounded,
+        colors: Vivid.alert,
+        title: 'Cảnh báo cảm biến',
+        info:
+            'Khi ngữ cảnh này đang bật (chạy bằng tay, theo giờ hoặc khi rời nhà), mỗi lần cảm biến được chọn phát hiện có người hoặc cửa mở, thành viên nhận thông báo đẩy.',
       ),
-      const SizedBox(height: 6),
       if (sensors.isEmpty)
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
@@ -397,11 +334,12 @@ class _SceneSheetState extends State<_SceneSheet> {
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
-          secondary: Icon(d.hasDoor ? Icons.door_front_door_outlined : Icons.directions_walk_rounded, color: cs.primary),
-          title: Text(d.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-          subtitle: Text(
-            d.hasDoor && !d.hasPresence ? 'Báo khi cửa mở' : (d.hasPresence && !d.hasDoor ? 'Báo khi phát hiện có người' : 'Báo khi có người / cửa mở'),
+          secondary: IconBadge(
+            d.hasDoor ? Icons.door_front_door_rounded : Icons.directions_walk_rounded,
+            colors: d.hasDoor ? Vivid.leave : Vivid.alert,
+            size: 34,
           ),
+          title: Text(d.name, maxLines: 1, overflow: TextOverflow.ellipsis),
           value: _alerts.contains(d.id),
           onChanged: (v) => setState(() => v ? _alerts.add(d.id) : _alerts.remove(d.id)),
         ),
@@ -441,31 +379,49 @@ class _SceneSheetState extends State<_SceneSheet> {
     }
   }
 
+  /// Thông báo giọng nói qua loa Cast khi ngữ cảnh tự chạy (theo giờ hoặc khi rời nhà).
+  List<Widget> _speakSection(BuildContext context) {
+    final name = _name.text.trim().isEmpty ? 'Đi vắng' : _name.text.trim();
+    return [
+      const SectionHeader(
+        icon: Icons.record_voice_over_rounded,
+        colors: Vivid.speak,
+        title: 'Thông báo qua loa',
+        info:
+            'Loa Google Home / Nest Mini đọc thông báo bằng tiếng Việt khi ngữ cảnh TỰ chạy (theo giờ hoặc khi rời nhà). Bấm chạy tay thì loa không đọc. Để trống câu đọc để dùng câu tự sinh.',
+      ),
+      SpeakPicker(model: widget.model, selected: _speakers, text: _speakText, hint: 'Đã chuyển sang chế độ $name', onChanged: () => setState(() {})),
+      const SizedBox(height: 4),
+    ];
+  }
+
   /// "Tự chuyển khi rời nhà": chạy ngữ cảnh này khi người cuối cùng (trong số thành viên đang chia sẻ vị trí) rời khỏi căn hộ.
   List<Widget> _leaveSection(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
     final h = widget.model.home;
     final has = h?.hasLocation == true;
     return [
-      SwitchListTile(
-        contentPadding: EdgeInsets.zero,
-        title: const Text('Tự chuyển khi rời nhà', style: TextStyle(fontWeight: FontWeight.w700)),
-        subtitle: const Text('Chạy ngữ cảnh này khi người cuối cùng rời khỏi căn hộ (theo vị trí điện thoại)'),
-        value: _leave,
-        onChanged: (v) => setState(() => _leave = v),
+      SectionHeader(
+        icon: Icons.directions_walk_rounded,
+        colors: Vivid.leave,
+        title: 'Tự chuyển khi rời nhà',
+        info:
+            'Chạy ngữ cảnh này khi người cuối cùng rời khỏi căn hộ, theo vị trí điện thoại. Bấm "Dùng vị trí hiện tại" khi đang ở nhà. '
+            'Mỗi thành viên cần cho phép vị trí "Luôn luôn"; máy chủ chỉ nhận trạng thái trong/ngoài, không lưu toạ độ. '
+            'Mỗi căn hộ chỉ một ngữ cảnh dùng được tuỳ chọn này. Bộ điều khiển trung tâm offline lúc rời nhà thì ngữ cảnh không chạy bù.',
+        trailing: Switch(value: _leave, onChanged: (v) => setState(() => _leave = v)),
       ),
       if (_leave) ...[
         Row(
           children: [
             Icon(has ? Icons.location_on_rounded : Icons.location_off_rounded, color: has ? cs.primary : cs.error),
             const SizedBox(width: 8),
-            Expanded(child: Text(has ? 'Đã đặt vị trí căn hộ · bán kính ${h!.geoRadius} m' : 'Chưa đặt vị trí căn hộ')),
+            Expanded(child: Text(has ? 'Đã đặt vị trí · ${h!.geoRadius} m' : 'Chưa đặt vị trí')),
             FilledButton.tonal(
               onPressed: _locBusy || _busy ? null : _setLocation,
               child: _locBusy
                   ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                  : Text(has ? 'Cập nhật' : 'Dùng vị trí hiện tại'),
+                  : Text(has ? 'Cập nhật' : 'Vị trí hiện tại'),
             ),
           ],
         ),
@@ -476,13 +432,7 @@ class _SceneSheetState extends State<_SceneSheet> {
             for (final r in const [100, 150, 300, 500]) ChoiceChip(label: Text('$r m'), selected: _radius == r, onSelected: (_) => _setRadius(r)),
           ],
         ),
-        const SizedBox(height: 6),
-        Text(
-          'Bấm "Dùng vị trí hiện tại" khi đang ở nhà. Mỗi thành viên cần cho phép vị trí "Luôn luôn" trên điện thoại của mình; máy chủ chỉ nhận trạng thái trong/ngoài, không lưu toạ độ. '
-          'Chỉ một ngữ cảnh mỗi căn hộ dùng được tuỳ chọn này (bật ở đây sẽ tắt ở ngữ cảnh khác). Nếu bộ điều khiển trung tâm đang offline lúc rời nhà, ngữ cảnh không chạy bù sau đó.',
-          style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-        ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 8),
       ],
     ];
   }
@@ -567,7 +517,7 @@ class _SceneSheetState extends State<_SceneSheet> {
                 decoration: const InputDecoration(labelText: 'Tên ngữ cảnh', hintText: 'vd: Đi ngủ', counterText: ''),
               ),
               const SizedBox(height: 16),
-              Text('Biểu tượng', style: tt.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+              const SectionHeader(icon: Icons.palette_rounded, colors: Vivid.scene, title: 'Biểu tượng'),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
@@ -576,7 +526,7 @@ class _SceneSheetState extends State<_SceneSheet> {
                   for (final k in SceneKind.values)
                     ChoiceChip(
                       showCheckmark: false,
-                      avatar: Icon(k.icon, size: 18, color: k == _kind ? cs.onPrimaryContainer : cs.onSurfaceVariant),
+                      avatar: Icon(k.icon, size: 18, color: k == _kind ? cs.onPrimaryContainer : sceneColors(k.id).first),
                       label: Text(k.label),
                       selected: k == _kind,
                       onSelected: (_) => setState(() => _kind = k),
@@ -584,10 +534,13 @@ class _SceneSheetState extends State<_SceneSheet> {
                 ],
               ),
               const SizedBox(height: 20),
-              Text('Thiết bị', style: tt.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-              const SizedBox(height: 2),
-              Text('Với mỗi công tắc chọn Bật, Tắt; với rèm chọn Mở, Đóng; hoặc giữ nguyên.', style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
-              const SizedBox(height: 8),
+              SectionHeader(
+                icon: Icons.toggle_on_rounded,
+                colors: Vivid.device,
+                title: 'Thiết bị',
+                info:
+                    'Với mỗi gang công tắc chọn Bật hoặc Tắt; với rèm chọn Mở hoặc Đóng; bỏ trống để giữ nguyên.${others.isEmpty ? '' : '\n\n${others.length} thiết bị không có công tắc bật/tắt nên không đưa vào ngữ cảnh: ${others.map((d) => d.name).join(', ')}.'}',
+              ),
               if (devices.isEmpty)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 12),
@@ -647,23 +600,6 @@ class _SceneSheetState extends State<_SceneSheet> {
                     ],
                   ),
                 ),
-              if (others.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.info_outline_rounded, size: 16, color: cs.onSurfaceVariant),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          '${others.length} thiết bị không có công tắc bật/tắt nên không đưa vào ngữ cảnh: ${others.map((d) => d.name).join(', ')}.',
-                          style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
               if (missing > 0)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
@@ -675,12 +611,13 @@ class _SceneSheetState extends State<_SceneSheet> {
               const SizedBox(height: 12),
               ..._alertSection(context),
               const SizedBox(height: 4),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Tự động kích hoạt', style: TextStyle(fontWeight: FontWeight.w700)),
-                subtitle: const Text('Chạy ngữ cảnh vào giờ đã chọn, không cần mở app'),
-                value: _auto,
-                onChanged: (v) => setState(() => _auto = v),
+              SectionHeader(
+                icon: Icons.schedule_rounded,
+                colors: Vivid.schedule,
+                title: 'Hẹn giờ',
+                info:
+                    'Tự chạy ngữ cảnh vào giờ đã chọn, không cần mở app. Giờ theo múi giờ của căn hộ. Nếu bộ điều khiển trung tâm offline lúc đến giờ, ngữ cảnh được thử lại trong 5 phút; quá thời gian đó sẽ bị bỏ lỡ chứ không chạy bù muộn.',
+                trailing: Switch(value: _auto, onChanged: (v) => setState(() => _auto = v)),
               ),
               if (_auto) ...[
                 const SizedBox(height: 4),
@@ -707,13 +644,10 @@ class _SceneSheetState extends State<_SceneSheet> {
                       ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  'Giờ theo múi giờ của căn hộ. Nếu bộ điều khiển trung tâm offline lúc đến giờ, ngữ cảnh được thử lại trong 5 phút; quá thời gian đó sẽ bị bỏ lỡ chứ không chạy bù muộn.',
-                  style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                ),
               ],
               ..._leaveSection(context),
+              const Divider(height: 24),
+              ..._speakSection(context),
               if (_error != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 12),

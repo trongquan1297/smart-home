@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../app_model.dart';
 import '../models.dart';
+import '../widgets/ui.dart';
 
 /// Lịch sử cảnh báo cảm biến của căn hộ (30 ngày gần nhất, tối đa 50 dòng). Chỉ thành viên trở lên xem được.
 class NotificationsScreen extends StatefulWidget {
@@ -38,8 +39,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
     return Scaffold(
       appBar: AppBar(title: const Text('Thông báo')),
       body: RefreshIndicator(
@@ -61,22 +60,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             final list = snap.data!;
             if (list.isEmpty) {
               return ListView(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(32, 96, 32, 0),
-                    child: Column(
-                      children: [
-                        Icon(Icons.notifications_none_rounded, size: 56, color: cs.primary.withValues(alpha: .6)),
-                        const SizedBox(height: 16),
-                        Text('Chưa có cảnh báo nào', style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Mở một ngữ cảnh như "Đi vắng" có chọn cảm biến cảnh báo. Khi cảm biến hiện diện hoặc cửa được kích hoạt, thông báo sẽ hiện ở đây.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: cs.onSurfaceVariant),
-                        ),
-                      ],
-                    ),
+                children: const [
+                  EmptyState(
+                    icon: Icons.notifications_none_rounded,
+                    colors: Vivid.bell,
+                    title: 'Chưa có thông báo',
+                    info:
+                        'Thông báo xuất hiện khi cảm biến được chọn trong ngữ cảnh đang bật phát hiện có người hoặc cửa mở, và khi ngữ cảnh tự chuyển (theo giờ, khi rời nhà).',
                   ),
                 ],
               );
@@ -95,11 +85,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 };
                 return Card(
                   child: ListTile(
-                    leading: Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(color: cs.tertiaryContainer, borderRadius: BorderRadius.circular(14)),
-                      child: Icon(icon, color: cs.onTertiaryContainer),
+                    leading: IconBadge(
+                      icon,
+                      colors: switch (n.kind) {
+                        'scene_auto' => Vivid.scene,
+                        'scene_failed' => Vivid.danger,
+                        'door_open' => Vivid.leave,
+                        _ => Vivid.alert,
+                      },
+                      size: 44,
                     ),
                     title: Text(n.title, style: const TextStyle(fontWeight: FontWeight.w700)),
                     subtitle: Text('${n.body}\n${fmtDateTime(n.createdAt)}'),

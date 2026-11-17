@@ -557,6 +557,8 @@ class Scene {
   final List<String> alertDevices; // cảm biến được báo khi ngữ cảnh này đang bật
   final bool active; // ngữ cảnh đang bật của căn hộ (chạy gần nhất)
   final bool autoLeave; // tự chạy khi người cuối cùng rời nhà
+  final List<String> speakerIds; // loa Cast đọc thông báo khi ngữ cảnh TỰ chạy
+  final String? speakText; // câu tuỳ chỉnh; null = câu tự sinh
 
   Scene({
     required this.id,
@@ -571,6 +573,8 @@ class Scene {
     this.alertDevices = const [],
     this.active = false,
     this.autoLeave = false,
+    this.speakerIds = const [],
+    this.speakText,
   });
 
   factory Scene.fromJson(Map<String, dynamic> j) => Scene(
@@ -588,6 +592,8 @@ class Scene {
     alertDevices: [for (final d in (j['alert_devices'] as List? ?? [])) d as String],
     active: j['active'] == true,
     autoLeave: j['auto_leave'] == true,
+    speakerIds: [for (final d in (j['speaker_ids'] as List? ?? [])) d as String],
+    speakText: j['speak_text'],
   );
 
   SceneKind get kind => SceneKind.parse(icon);
@@ -632,6 +638,8 @@ class DeviceRule {
   final String? sourceState; // ON | OFF
   final String? targetState; // ON | OFF
   final bool enabled;
+  final List<String> speakerIds; // loa Cast đọc thông báo khi luật chạy
+  final String? speakText;
   DeviceRule({
     required this.id,
     required this.deviceId,
@@ -643,6 +651,8 @@ class DeviceRule {
     this.sourceState,
     this.targetState,
     this.enabled = true,
+    this.speakerIds = const [],
+    this.speakText,
   });
 
   factory DeviceRule.fromJson(Map<String, dynamic> j) => DeviceRule(
@@ -656,6 +666,8 @@ class DeviceRule {
     sourceState: j['source_state'],
     targetState: j['target_state'],
     enabled: j['enabled'] != false,
+    speakerIds: [for (final d in (j['speaker_ids'] as List? ?? [])) d as String],
+    speakText: j['speak_text'],
   );
 
   /// "30 giây", "5 phút", "1 giờ 30 phút".
@@ -668,4 +680,35 @@ class DeviceRule {
     final h = s ~/ 3600, m = (s % 3600) ~/ 60;
     return m == 0 ? '$h giờ' : '$h giờ $m phút';
   }
+}
+
+/// Loa Google Cast (Google Home / Nest Mini…) đã thêm vào căn hộ.
+class Speaker {
+  final String id;
+  final String name;
+  final String castId;
+  final String? host;
+  Speaker({required this.id, required this.name, required this.castId, this.host});
+  factory Speaker.fromJson(Map<String, dynamic> j) => Speaker(id: j['id'], name: j['name'], castId: j['cast_id'], host: j['host']);
+}
+
+/// Loa gateway vừa tìm thấy qua mDNS (chưa chắc đã thêm).
+class FoundSpeaker {
+  final String castId;
+  final String name;
+  final String model;
+  final String host;
+  final int port;
+  final bool added;
+  final String? gatewayId; // gateway đã thấy loa (cùng LAN với loa)
+  FoundSpeaker({this.gatewayId, required this.castId, required this.name, required this.model, required this.host, required this.port, required this.added});
+  factory FoundSpeaker.fromJson(Map<String, dynamic> j) => FoundSpeaker(
+    castId: j['cast_id'],
+    name: j['name'] ?? 'Loa Cast',
+    model: j['model'] ?? '',
+    host: j['host'],
+    port: (j['port'] as num?)?.toInt() ?? 8009,
+    added: j['added'] == true,
+    gatewayId: j['gateway_id'],
+  );
 }

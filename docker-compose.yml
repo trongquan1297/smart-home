@@ -139,6 +139,27 @@ services:
     depends_on: [mosquitto, backend]
     restart: unless-stopped
 
+  # Loa Google Cast GIẢ LẬP + gateway chỉ-làm-loa, để thử tính năng thông báo giọng nói không cần loa thật:
+  #   COMPOSE_PROFILES=sim,cast-sim CAST_GATEWAY_TOKEN=<token gateway tạo trong app> docker compose up -d --build
+  # rồi mở giao diện loa giả ở http://localhost:8082 và thêm loa trong app (⋮ → Loa thông báo → Thêm loa).
+  cast-sim:
+    profiles: ["cast-sim"]
+    build: ./infra/cast-sim
+    ports:
+      - "8082:8082"
+  gateway-cast:
+    profiles: ["cast-sim"]
+    build: ./gateway
+    environment:
+      MQTT_DISABLED: "1"
+      MQTT_CLIENT_ID: gateway-cast
+      CLOUD_WS_URL: ${CLOUD_WS_URL:-ws://backend:8080/gw/ws}
+      GATEWAY_TOKEN: ${CAST_GATEWAY_TOKEN:-}
+      TTS_URL_TEMPLATE: http://cast-sim:8099/tts?q={text}
+      RUST_LOG: info
+    depends_on: [backend, cast-sim]
+    restart: unless-stopped
+
 volumes:
   pgdata:
   matterbridge-data:

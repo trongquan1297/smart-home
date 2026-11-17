@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../app_model.dart';
+import '../widgets/ui.dart';
 import '../models.dart';
 
 class MembersScreen extends StatefulWidget {
@@ -60,10 +61,8 @@ class _MembersScreenState extends State<MembersScreen> {
 
   Future<void> _invite() async {
     final m = context.read<AppModel>();
-    final role = await showModalBottomSheet<String>(
+    final role = await showCenterSheet<String>(
       context: context,
-      isScrollControlled: true, // 4 lựa chọn có thể cao hơn nửa màn hình nhỏ: cho cuộn thay vì tràn
-      showDragHandle: true,
       builder: (c) => SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
@@ -99,12 +98,7 @@ class _MembersScreenState extends State<MembersScreen> {
     try {
       _RenterTerms? terms;
       if (role == 'renter') {
-        terms = await showModalBottomSheet<_RenterTerms>(
-          context: context,
-          isScrollControlled: true,
-          showDragHandle: true,
-          builder: (_) => const _RenterInviteSheet(),
-        );
+        terms = await showCenterSheet<_RenterTerms>(context: context, builder: (_) => const _RenterInviteSheet());
         if (terms == null || !mounted) return;
       }
       final token = await m.api.invite(m.home!.id, role, durationHours: terms?.hours, startsAt: terms?.startsAt);
@@ -120,15 +114,24 @@ class _MembersScreenState extends State<MembersScreen> {
     return showDialog<void>(
       context: context,
       builder: (c) => AlertDialog(
-        icon: Icon(Icons.mark_email_read_rounded, color: cs.primary, size: 32),
+        icon: const IconBadge(Icons.mark_email_read_rounded, colors: Vivid.members, size: 52),
         title: const Text('Mã mời đã sẵn sàng'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              'Gửi mã này cho người thân. Họ mở app, bấm biểu tượng thêm người ở màn Căn hộ và nhập mã.\nQuyền: ${_roleLabel(role)} · mã có hiệu lực 7 ngày · dùng 1 lần.${terms == null ? '' : '\n${terms.describe()}'}',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: cs.onSurfaceVariant),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                Pill(Icons.badge_rounded, _roleLabel(role), color: cs.primary),
+                const Pill(Icons.event_available_rounded, '7 ngày'),
+                const Pill(Icons.looks_one_rounded, 'Dùng 1 lần'),
+                InfoTip(
+                  'Cách dùng mã mời',
+                  'Gửi mã này cho người thân. Họ mở app, bấm biểu tượng thêm người ở màn danh sách căn hộ và nhập mã.${terms == null ? '' : '\n\n${terms.describe()}'}',
+                ),
+              ],
             ),
             const SizedBox(height: 16),
             Container(
@@ -227,9 +230,8 @@ class _MembersScreenState extends State<MembersScreen> {
 
   Future<void> _extend(Member mem) async {
     final m = context.read<AppModel>();
-    final hours = await showModalBottomSheet<int>(
+    final hours = await showCenterSheet<int>(
       context: context,
-      showDragHandle: true,
       builder: (c) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
@@ -326,7 +328,13 @@ class _MembersScreenState extends State<MembersScreen> {
         onRefresh: () async => setState(_load),
         child: CustomScrollView(
           slivers: [
-            const SliverAppBar.large(title: Text('Thành viên')),
+            SliverAppBar.large(
+              title: const Text('Thành viên'),
+              actions: [
+                if (home.isAdmin) HeaderAction(icon: Icons.person_add_alt_1_rounded, tooltip: 'Mời thành viên', onPressed: _invite),
+                const SizedBox(width: 8),
+              ],
+            ),
             FutureBuilder<List<Member>>(
               future: _future,
               builder: (_, snap) {
@@ -349,12 +357,21 @@ class _MembersScreenState extends State<MembersScreen> {
                           padding: const EdgeInsets.all(14),
                           child: Row(
                             children: [
-                              CircleAvatar(
-                                radius: 26,
-                                backgroundColor: owner ? cs.primary : cs.secondaryContainer,
+                              Container(
+                                width: 52,
+                                height: 52,
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  gradient: LinearGradient(
+                                    colors: owner ? Vivid.timer : (mem.role == 'renter' ? Vivid.leave : Vivid.members),
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                                ),
                                 child: Text(
                                   initials,
-                                  style: TextStyle(fontWeight: FontWeight.w800, color: owner ? cs.onPrimary : cs.onSecondaryContainer),
+                                  style: const TextStyle(fontWeight: FontWeight.w800, color: Colors.white, fontSize: 16),
                                 ),
                               ),
                               const SizedBox(width: 14),
@@ -429,9 +446,6 @@ class _MembersScreenState extends State<MembersScreen> {
           ],
         ),
       ),
-      floatingActionButton: home.isAdmin
-          ? FloatingActionButton.extended(onPressed: _invite, icon: const Icon(Icons.person_add_alt_1_rounded), label: const Text('Mời thành viên'))
-          : null,
     );
   }
 }
@@ -457,12 +471,7 @@ class _RoleOption extends StatelessWidget {
             padding: const EdgeInsets.all(14),
             child: Row(
               children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(14)),
-                  child: Icon(icon, color: cs.onPrimaryContainer),
-                ),
+                IconBadge(icon, colors: icon == Icons.key_rounded || icon == Icons.vpn_key_rounded ? Vivid.leave : Vivid.members, size: 44),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(
@@ -554,15 +563,19 @@ class _RenterInviteSheetState extends State<_RenterInviteSheet> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('Mời khách thuê', style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
-              const SizedBox(height: 4),
-              Text(
-                'Khách chỉ bật/tắt được thiết bị và tự mất quyền khi hết giờ. Bạn có thể cấp ngay, gia hạn hoặc thu hồi bất cứ lúc nào.',
-                style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+              Row(
+                children: [
+                  const IconBadge(Icons.key_rounded, colors: Vivid.leave, size: 40),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text('Mời khách thuê', style: tt.titleLarge)),
+                  const InfoTip(
+                    'Khách thuê',
+                    'Khách chỉ bật/tắt được thiết bị và tự mất quyền khi hết giờ. Bạn có thể cấp ngay, gia hạn hoặc thu hồi bất cứ lúc nào.',
+                  ),
+                ],
               ),
               const SizedBox(height: 16),
-              Text('Thời gian sử dụng', style: tt.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-              const SizedBox(height: 8),
+              const SectionHeader(icon: Icons.hourglass_bottom_rounded, colors: Vivid.timer, title: 'Thời gian sử dụng'),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -588,8 +601,12 @@ class _RenterInviteSheetState extends State<_RenterInviteSheet> {
                 onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 16),
-              Text('Bắt đầu', style: tt.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-              const SizedBox(height: 8),
+              const SectionHeader(
+                icon: Icons.event_rounded,
+                colors: Vivid.schedule,
+                title: 'Bắt đầu',
+                info: 'Hẹn giờ: trước giờ này khách chưa vào được; bạn có thể bấm "Cấp quyền ngay" để mở sớm.',
+              ),
               SegmentedButton<bool>(
                 showSelectedIcon: false,
                 segments: const [
@@ -606,11 +623,6 @@ class _RenterInviteSheetState extends State<_RenterInviteSheet> {
                   icon: const Icon(Icons.event_rounded),
                   label: Text('Bắt đầu lúc ${fmtDateTime(_start)}', style: const TextStyle(fontWeight: FontWeight.w700)),
                   style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Trước giờ này khách chưa vào được; bạn có thể bấm "Cấp quyền ngay" để mở sớm.',
-                  style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
                 ),
               ],
               if (_error != null)

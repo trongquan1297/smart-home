@@ -142,11 +142,14 @@ pub struct SceneOut {
     alert_devices: Vec<Uuid>,
     /// Tự chạy khi người cuối cùng rời nhà (cần căn hộ đã đặt vị trí).
     auto_leave: bool,
+    /// Loa Cast đọc thông báo khi ngữ cảnh này TỰ chạy (rỗng = im lặng) và câu tuỳ chỉnh (null = câu tự sinh).
+    speaker_ids: Vec<Uuid>,
+    speak_text: Option<String>,
     /// Ngữ cảnh đang bật của căn hộ (chạy gần nhất); chỉ ngữ cảnh đang bật mới sinh cảnh báo.
     active: bool,
 }
 
-const SCENE_COLS: &str = "id, home_id, name, icon, actions, auto_enabled, to_char(auto_time, 'HH24:MI') AS auto_time, auto_days, last_run_at, last_status, alert_devices, auto_leave,
+const SCENE_COLS: &str = "id, home_id, name, icon, actions, auto_enabled, to_char(auto_time, 'HH24:MI') AS auto_time, auto_days, last_run_at, last_status, alert_devices, auto_leave, speaker_ids, speak_text,
     EXISTS(SELECT 1 FROM homes h WHERE h.active_scene_id = scenes.id) AS active";
 
 pub async fn list_scenes(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(hid): Path<Uuid>) -> ApiResult<Json<Vec<SceneOut>>> {
@@ -167,6 +170,10 @@ pub struct SceneReq {
     alert_devices: Option<Vec<Uuid>>,
     /// Chạy khi người cuối cùng rời nhà; chỉ một ngữ cảnh mỗi căn hộ (bật cho ngữ cảnh này thì tắt ở ngữ cảnh khác).
     auto_leave: Option<bool>,
+    /// Loa Cast sẽ đọc thông báo khi ngữ cảnh tự chạy (thay thế toàn bộ danh sách).
+    speaker_ids: Option<Vec<Uuid>>,
+    /// Câu đọc tuỳ chỉnh; chuỗi rỗng = quay về câu tự sinh.
+    speak_text: Option<String>,
 }
 
 /// Mỗi cảm biến được chọn phải thuộc căn hộ và có thuộc tính `occupancy` hoặc `contact` (nhìn từ exposes).
@@ -231,6 +238,8 @@ pub async fn create_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, P
         return Err(ApiError::BadRequest("auto_time is required when auto_enabled".into()));
     }
     let alerts = validate_alert_devices(&st, hid, b.alert_devices.as_deref().unwrap_or(&[])).await?;
+    let speakers = crate::speak::validate_speakers(&st, hid, b.speaker_ids.as_deref().unwrap_or(&[])).await?;
+    let speak_text = crate::speak::clean_text(b.speak_text.as_deref())?.filter(|t| !t.is_empty());
     let leave = b.auto_leave.unwrap_or(false);
     if leave {
         claim_auto_leave(&st, hid, None).await?;
@@ -241,8 +250,8 @@ pub async fn create_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, P
     }
     // last_run_at = now(): tạo lúc 10:02 cho khung 10:00 thì không chạy "bù" lần đã qua.
     let s = sqlx::query_as(&format!(
-        "INSERT INTO scenes (home_id, name, icon, actions, auto_enabled, auto_time, auto_days, last_run_at, alert_devices, auto_leave)
-         VALUES ($1,$2,$3,$4,$5,$6,$7, now(), $8, $9) RETURNING {SCENE_COLS}"
+        "INSERT INTO scenes (home_id, name, icon, actions, auto_enabled, auto_time, auto_days, last_run_at, alert_devices, auto_leave, speaker_ids, speak_text)
+         VALUES ($1,$2,$3,$4,$5,$6,$7, now(), $8, $9, $10, $11) RETURNING {SCENE_COLS}"
     ))
     .bind(hid)
     .bind(name)
@@ -253,6 +262,8 @@ pub async fn create_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, P
     .bind(days)
     .bind(&alerts)
     .bind(leave)
+    .bind(&speakers)
+    .bind(speak_text)
     .fetch_one(&st.db)
     .await?;
     Ok((StatusCode::CREATED, Json(s)))
@@ -277,6 +288,11 @@ pub async fn update_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, P
         Some(ids) => Some(validate_alert_devices(&st, hid, ids).await?),
         None => None,
     };
+    let speakers = match &b.speaker_ids {
+        Some(ids) => Some(crate::speak::validate_speakers(&st, hid, ids).await?),
+        None => None,
+    };
+    let speak_text = crate::speak::clean_text(b.speak_text.as_deref())?;
     if b.auto_leave == Some(true) {
         claim_auto_leave(&st, hid, Some(sid)).await?;
     }
@@ -294,7 +310,9 @@ pub async fn update_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, P
                last_run_at = CASE WHEN $8 THEN now() ELSE last_run_at END,
                last_status = CASE WHEN $8 THEN NULL ELSE last_status END,
                alert_devices = COALESCE($9, alert_devices),
-               auto_leave = COALESCE($10, auto_leave)
+               auto_leave = COALESCE($10, auto_leave),
+               speaker_ids = COALESCE($11, speaker_ids),
+               speak_text = CASE WHEN $12::text IS NULL THEN speak_text ELSE NULLIF($12, '') END
              WHERE id = $1 RETURNING {SCENE_COLS}"
         ))
         .bind(sid)
@@ -307,6 +325,8 @@ pub async fn update_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, P
         .bind(reschedule)
         .bind(alerts)
         .bind(b.auto_leave)
+        .bind(speakers)
+        .bind(speak_text)
         .fetch_one(&st.db)
         .await?,
     ))

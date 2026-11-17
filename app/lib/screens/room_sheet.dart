@@ -2,13 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../app_model.dart';
 import '../models.dart';
+import '../widgets/ui.dart';
 
 /// Tạo phòng mới (room == null) hoặc sửa/xoá phòng: tên + icon. Icon tự gợi ý theo tên cho tới khi người dùng chọn tay.
 Future<void> showRoomSheet(BuildContext context, AppModel m, {Room? room}) {
-  return showModalBottomSheet<void>(
+  return showCenterSheet<void>(
     context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
     builder: (_) => _RoomSheet(model: m, room: room),
   );
 }
@@ -112,13 +111,7 @@ class _RoomSheetState extends State<_RoomSheet> {
               children: [
                 AnimatedSwitcher(
                   duration: const Duration(milliseconds: 200),
-                  child: Container(
-                    key: ValueKey(_kind),
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(16)),
-                    child: Icon(_kind.icon, color: cs.onPrimaryContainer),
-                  ),
+                  child: IconBadge(_kind.icon, key: ValueKey(_kind), colors: roomColors(_kind.id), size: 48),
                 ),
                 const SizedBox(width: 14),
                 Text(_editing ? 'Sửa phòng' : 'Phòng mới', style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
@@ -213,7 +206,7 @@ class _KindTile extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 2),
           child: Column(
             children: [
-              Icon(kind.icon, color: selected ? cs.onPrimaryContainer : cs.onSurfaceVariant),
+              Icon(kind.icon, color: selected ? cs.onPrimaryContainer : roomColors(kind.id).first),
               const SizedBox(height: 4),
               Text(
                 kind.label,

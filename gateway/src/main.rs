@@ -5,6 +5,7 @@
 //! - Lên cloud: bridge/devices, trạng thái, availability.
 //! - Xuống thiết bị: {"type":"set","friendly_name","payload"} → publish `<base>/<name>/set`.
 //! - Giữ cache để phát lại toàn bộ trạng thái mỗi khi nối lại cloud.
+mod cast;
 mod matter;
 
 use std::{
@@ -69,10 +70,13 @@ async fn main() -> anyhow::Result<()> {
     let (up_tx, up_rx) = mpsc::channel::<String>(256);
     let reply_tx = up_tx.clone(); // trả lời yêu cầu từ cloud (matter_*)
     let matter_cfg = matter::Config::from_env();
+    cast::start(); // mDNS tìm loa Cast + máy chủ HTTP phát TTS (tuỳ chọn: không có loa thì không tốn gì)
     info!("matter bridge integration: {}", if matter_cfg.enabled() { "enabled" } else { "disabled (MATTERBRIDGE_URL not set)" });
 
+    // MQTT_DISABLED=1: gateway chỉ làm loa Cast (chạy ở máy cùng LAN với loa, không có Zigbee2MQTT).
+    let mqtt_enabled = std::env::var("MQTT_DISABLED").map(|v| v.is_empty() || v == "0").unwrap_or(true);
     // MQTT → cache + hàng đợi lên cloud
-    {
+    if mqtt_enabled {
         let (mqtt, cache, base) = (mqtt.clone(), cache.clone(), base.clone());
         tokio::spawn(async move {
             loop {
@@ -179,6 +183,15 @@ async fn run_session(url: &str, token: &str, base: &str, mqtt: &AsyncClient, cac
 
     // bỏ hàng đợi cũ rồi phát lại toàn bộ trạng thái hiện hành
     while up_rx.try_recv().is_ok() {}
+    // Khai báo khả năng để backend chọn đúng gateway (Zigbee/Matter hay chỉ loa Cast).
+    let mut caps = Vec::new();
+    if std::env::var("MQTT_DISABLED").map(|v| v.is_empty() || v == "0").unwrap_or(true) {
+        caps.push("z2m");
+    }
+    if cast::get().is_some_and(|c| c.mdns_ok()) {
+        caps.push("cast");
+    }
+    sink.send(Message::Text(json!({"type": "hello", "caps": caps}).to_string())).await?;
     for m in replay(cache) {
         sink.send(Message::Text(m)).await?;
     }
@@ -222,6 +235,20 @@ async fn handle_cmd(text: &str, base: &str, mqtt: &AsyncClient, reply_tx: &mpsc:
                 let reply = matter::handle(&cfg, &v).await;
                 let _ = tx.send(reply.to_string()).await;
             });
+        }
+        Some("cast_scan") => {
+            let Some(cast) = cast::get() else { return };
+            let (id, tx) = (v.get("id").cloned().unwrap_or(Value::Null), reply_tx.clone());
+            tokio::spawn(async move {
+                let mut r = cast.scan().await;
+                r["type"] = json!("cast_reply");
+                r["id"] = id;
+                let _ = tx.send(r.to_string()).await;
+            });
+        }
+        Some("speak") => {
+            let Some(cast) = cast::get() else { return };
+            tokio::spawn(async move { cast.speak(&v).await });
         }
         _ => {}
     }

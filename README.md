@@ -129,6 +129,17 @@ Trên thẻ công tắc/đèn/ổ cắm (quản trị) bấm ⚡, chọn gang r�
 
 Luật chạy trong backend (`backend/src/rules.rs`): mỗi bản tin trạng thái từ gateway được so với trạng thái cũ; chuyển ON↔OFF sẽ hẹn giờ (bảng `pending_actions`, sống sót qua khởi động lại backend, kiểm tra mỗi giây) hoặc kích hoạt luật `link`. Áp dụng cho mọi cách đổi trạng thái (app, ngữ cảnh, công tắc vật lý). Hẹn giờ bị huỷ nếu gang đổi trạng thái trước hạn; mỗi gang tối đa một luật tự tắt và một luật tự bật lại; luật `link` **không nối chuỗi** (gang bị luật điều khiển không kích hoạt luật khác) để tránh vòng lặp. Cần backend và gateway online; hẹn giờ đến hạn mà gateway offline quá 60 giây thì bỏ. Chỉ áp dụng cho trạng thái ON/OFF — rèm (OPEN/CLOSE) chưa hỗ trợ.
 
+## Thông báo giọng nói qua loa Google Cast
+
+Menu ⋮ → **Loa thông báo** (quản trị): "Thêm loa" quét mạng LAN của bộ điều khiển trung tâm (mDNS `_googlecast._tcp`) và liệt kê Google Home / Nest Mini… tìm thấy; chọn loa, đặt tên, bấm ▶ để phát thử. Trong form ngữ cảnh và trong màn ⚡ của từng luật có mục **Thông báo qua loa**: chọn loa và (tuỳ chọn) câu đọc; để trống câu thì dùng câu tự sinh ("Đã chuyển sang chế độ X", "Mọi người đã rời nhà. Đã chuyển sang chế độ X", "Đã tự động tắt <thiết bị>", "<thiết bị> đã bật theo <thiết bị khác>"). **Chỉ đọc khi hành động TỰ chạy** (ngữ cảnh theo giờ / khi rời nhà, luật ⚡), không đọc khi bạn bấm chạy tay.
+
+- Loa Google Home/Nest Mini dùng **Google Cast**, không phải thiết bị Matter (Matter chỉ để Google Home điều khiển công tắc); vì vậy loa được thêm qua Cast chứ không qua Matter bridge.
+- **Phải có gateway chạy trong cùng mạng LAN với loa.** Backend/gateway chạy trên máy chủ đám mây (như 10.60.1.14) không thấy được loa trong nhà (không có mDNS tới LAN đó). Nếu backend ở xa: chạy thêm một gateway chỉ-làm-loa trên máy Linux trong nhà bằng `edge/docker-compose.cast.yml` (cần token gateway mới tạo trong app, `MQTT_DISABLED=1`, không cần Zigbee2MQTT). Gateway tự khai báo `hello {caps}`; backend chọn gateway Zigbee/Matter cho thiết bị và chỉ chọn gateway có `cast` cho loa. Mỗi loa nhớ gateway đã tìm thấy nó (`speakers.gateway_id`), gateway đó offline thì không phát (không phát nhầm qua gateway khác).
+- **Loa giả lập để thử không cần loa thật:** profile `cast-sim` (`infra/cast-sim`) chạy một loa Cast giả (mDNS + CASTV2) kèm giao diện web ở cổng 8082 (danh sách thông báo đã "phát", nghe lại ngay trên trình duyệt, nhật ký phiên Cast) và một gateway chỉ-làm-loa (`gateway-cast`, cần `CAST_GATEWAY_TOKEN` là token của một gateway tạo trong app): `COMPOSE_PROFILES=sim,cast-sim CAST_GATEWAY_TOKEN=… docker compose up -d --build`. Trên server (đã làm): giao diện ở cổng 18082, gateway tên "Loa giả lập (cast-sim)". Loa giả lập chỉ kiểm tra luồng backend → gateway → Cast, không chứng minh tương thích với loa Google thật.
+- Luồng: backend quyết định "nói gì, loa nào" → gửi `speak` xuống gateway (Pi cùng LAN với loa) → gateway tải mp3 TTS tiếng Việt → phục vụ qua HTTP cổng `CAST_HTTP_PORT` (mặc định 8765) → cast tới loa (CASTV2/TLS cổng 8009, Default Media Receiver) → gửi STOP khi xong. Backend ở datacenter không với tới loa trong LAN nên không tự cast. Gateway cần `network_mode: host` (đã có trong `edge/docker-compose.yml`) và loa phải truy cập được cổng HTTP của Pi (kiểm tra tường lửa/isolation Wi‑Fi).
+- **TTS dùng endpoint Google Translate không chính thức** (`translate.google.com/translate_tts`): không có tài liệu, có thể bị đổi hoặc chặn bất cứ lúc nào, và dùng ngoài trình duyệt có thể trái điều khoản dịch vụ của Google. Đổi nguồn bằng biến `TTS_URL_TEMPLATE` của gateway (đặt `{text}` là chỗ chèn câu đã mã hoá URL), ví dụ trỏ tới dịch vụ TTS riêng hoặc Google Cloud Text-to-Speech qua một proxy nhỏ.
+- Mỗi loa đọc từng câu một (xếp hàng); khi đọc, loa tạm dừng nhạc đang phát. Câu tối đa 140 ký tự.
+
 ## Chạy với Zigbee2MQTT thật trên Pi 3
 
 1. Cắm dongle, tìm đường dẫn ổn định: `ls /dev/serial/by-id/`.
@@ -177,6 +188,7 @@ Flutter app ── backend (cloud) ◀── gateway agent ┘   (lấy mã QR, 
 | `GET /v1/homes/:id/devices`, `PATCH /v1/devices/:id` | thiết bị: đổi tên, gán phòng, đặt tên + loại tải cho từng gang (`channels`: `light` `fan` `outlet` `air_conditioner` `water_heater` `other`) |
 | `POST /v1/devices/:id/command` `{"payload":{"state_1":"TOGGLE"}}` | điều khiển → `202`; `503` nếu gateway offline |
 | `GET /v1/homes/:id/ws?token=` | realtime: `device_state`, `device_online`, `gateway`, `devices_changed`, `scene_active`, `alert` (`alert` chỉ gửi cho thành viên trở lên) |
+| `GET/POST /v1/homes/:id/speakers`, `POST …/speakers/scan`, `PATCH/DELETE /v1/speakers/:id`, `POST /v1/speakers/:id/test` | loa Cast: xem = member; quét/thêm/đổi tên/xoá = admin; phát thử = member. Ngữ cảnh và luật nhận thêm `speaker_ids`, `speak_text` |
 | `GET/POST /v1/homes/:id/rules`, `PATCH/DELETE /v1/rules/:id` | luật thiết bị `{device_id,key,kind: auto_off\|auto_on\|link, delay_s, source_device_id, source_key, source_state, target_state}`: xem = member, sửa = admin |
 | `PUT/DELETE /v1/homes/:id/location`, `PUT /v1/homes/:id/presence` | vị trí căn hộ `{lat,lng,radius_m}` (admin); điện thoại báo `{inside: bool}` (member) cho "tự chuyển khi rời nhà" |
 | `GET /v1/homes/:id/notifications`, `DELETE /v1/homes/:id/active-scene`, `POST/DELETE /v1/push/tokens` | lịch sử cảnh báo (member); tắt ngữ cảnh đang bật (member); đăng ký/gỡ token FCM của thiết bị `{token, platform: ios\|android}` |
@@ -187,6 +199,8 @@ Flutter app ── backend (cloud) ◀── gateway agent ┘   (lấy mã QR, 
 Lệnh chỉ chấp nhận thuộc tính `state*` (ON/OFF/TOGGLE), `brightness*`, `color_temp*`; mọi payload khác bị từ chối để client không thể gọi các topic quản trị của Zigbee2MQTT.
 
 ## Đã kiểm chứng / chưa kiểm chứng
+
+Thông báo giọng nói: đã kiểm thử đầu-cuối trên Docker với **loa Cast giả** do tôi tự viết (quảng bá mDNS, TLS tự ký, CASTV2 tối thiểu): quét thấy loa, thêm loa qua app, gateway tải TTS (máy chủ TTS giả), phục vụ mp3 qua HTTP, loa giả nhận LOAD và tải được tệp, STOP sau khi phát; câu đúng cho ngữ cảnh theo giờ, rời nhà, luật tự tắt và luật đồng kích hoạt. **Chưa kiểm chứng**: với loa Google Home/Nest Mini thật (giao thức tôi viết theo hiểu biết về CASTV2, chưa đối chiếu với thiết bị thật), với Google Translate TTS thật từ gateway, và mDNS trên mạng LAN thật.
 
 Luật thiết bị (⚡): đã kiểm thử đầu-cuối trên Docker với simulator Zigbee (tự tắt ~4 s, tự bật lại ~3 s, huỷ khi đổi trạng thái trước hạn, luật bị tắt không chạy, đồng kích hoạt bật/tắt, không nối chuỗi, phân quyền, validate) và giao diện iOS Simulator (tạo luật tự tắt). **Chưa kiểm chứng**: với thiết bị VSmart thật (độ trễ phản hồi trạng thái), luật link qua nhiều gateway, khởi động lại backend giữa lúc đang hẹn giờ.
 

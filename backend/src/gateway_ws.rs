@@ -41,6 +41,10 @@ enum GwMsg {
     Availability { friendly_name: String, online: bool },
     /// Trả lời yêu cầu matter_* của cloud (xem routes::matter_request)
     MatterReply { id: Uuid, info: Option<Value>, error: Option<String> },
+    /// Gateway khai báo khả năng ngay sau khi kết nối (`z2m`, `cast`)
+    Hello { caps: Vec<String> },
+    /// Trả lời yêu cầu cast_scan (speak::scan)
+    CastReply { id: Uuid, devices: Option<Value>, error: Option<String> },
     Ping,
 }
 
@@ -148,6 +152,8 @@ fn kind_of(exposes: &[Value]) -> &'static str {
 async fn handle(st: &AppState, gw: &Gw, msg: GwMsg) -> ApiResult<()> {
     match msg {
         GwMsg::Ping => touch(st, gw).await,
+        GwMsg::Hello { caps } => st.hub.set_caps(gw.id, caps.into_iter().filter(|c| c.len() <= 16).take(8).collect()),
+        GwMsg::CastReply { id, devices, error } => st.hub.resolve(gw.id, id, json!({ "devices": devices, "error": error })),
         GwMsg::MatterReply { id, info, error } => st.hub.resolve(gw.id, id, json!({ "info": info, "error": error })),
         GwMsg::Devices { devices } => {
             let mut keep: Vec<String> = Vec::new();

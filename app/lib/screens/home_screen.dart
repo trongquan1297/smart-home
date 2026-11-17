@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../app_model.dart';
 import '../models.dart';
 import 'device_edit_dialog.dart';
+import '../widgets/ui.dart';
 import 'device_rules_sheet.dart';
 import 'gateways_screen.dart';
 import 'matter_screen.dart';
@@ -14,6 +15,7 @@ import 'notifications_screen.dart';
 import 'scenes_screen.dart';
 import 'members_screen.dart';
 import 'room_sheet.dart';
+import 'speakers_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -29,9 +31,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _pickScene(BuildContext context) async {
     final m = context.read<AppModel>();
     final msg = ScaffoldMessenger.of(context);
-    final picked = await showModalBottomSheet<Scene>(
+    final picked = await showCenterSheet<Scene>(
       context: context,
-      showDragHandle: true,
       builder: (ctx) {
         final scenes = m.scenes;
         if (scenes.isEmpty) {
@@ -43,9 +44,8 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               for (final s in scenes)
                 ListTile(
-                  leading: Icon(s.kind.icon),
-                  title: Text(s.name),
-                  subtitle: Text('${s.actions.length} thiết bị${s.alertDevices.isNotEmpty ? ' · cảnh báo ${s.alertDevices.length} cảm biến' : ''}'),
+                  leading: IconBadge(s.kind.icon, colors: sceneColors(s.kind.id), size: 40),
+                  title: Text(s.name, style: const TextStyle(fontWeight: FontWeight.w600)),
                   trailing: s.active ? Icon(Icons.check_circle_rounded, color: Theme.of(ctx).colorScheme.primary) : null,
                   selected: s.active,
                   onTap: () => Navigator.pop(ctx, s),
@@ -149,14 +149,18 @@ class _HomeScreenState extends State<HomeScreen> {
               actions: [
                 // Khách thuê chỉ bật/tắt thiết bị: không có ngữ cảnh, danh sách thành viên.
                 if (home.canRunScenes)
-                  IconButton(icon: const Icon(Icons.auto_awesome_rounded), tooltip: 'Ngữ cảnh', onPressed: () => _open(context, const ScenesScreen())),
+                  IconButton(
+                    icon: const Icon(Icons.auto_awesome_rounded, color: Color(0xFF8B5CF6)),
+                    tooltip: 'Ngữ cảnh',
+                    onPressed: () => _open(context, const ScenesScreen()),
+                  ),
                 // Khách thuê chỉ bật/tắt thiết bị; khách xem không có thông báo (máy chủ không gửi cảnh báo cho họ).
                 if (home.canRunScenes)
                   IconButton(
                     icon: Badge(
                       isLabelVisible: m.unreadAlerts > 0,
                       label: Text(m.unreadAlerts > 9 ? '9+' : '${m.unreadAlerts}'),
-                      child: const Icon(Icons.notifications_rounded),
+                      child: const Icon(Icons.notifications_rounded, color: Color(0xFFF59E0B)),
                     ),
                     tooltip: 'Thông báo',
                     onPressed: () => _open(context, const NotificationsScreen()),
@@ -169,21 +173,42 @@ class _HomeScreenState extends State<HomeScreen> {
                     onSelected: (v) => _open(context, switch (v) {
                       'members' => const MembersScreen(),
                       'matter' => const MatterScreen(),
+                      'speakers' => const SpeakersScreen(),
                       _ => const GatewaysScreen(),
                     }),
                     itemBuilder: (_) => [
                       const PopupMenuItem(
                         value: 'members',
-                        child: ListTile(leading: Icon(Icons.people_alt_rounded), title: Text('Thành viên'), contentPadding: EdgeInsets.zero),
+                        child: ListTile(
+                          leading: IconBadge(Icons.people_alt_rounded, colors: Vivid.members, size: 32),
+                          title: Text('Thành viên'),
+                          contentPadding: EdgeInsets.zero,
+                        ),
                       ),
                       if (home.isAdmin) ...const [
                         PopupMenuItem(
                           value: 'matter',
-                          child: ListTile(leading: Icon(Icons.qr_code_2_rounded), title: Text('Google Home / Apple Home'), contentPadding: EdgeInsets.zero),
+                          child: ListTile(
+                            leading: IconBadge(Icons.qr_code_2_rounded, colors: Vivid.matter, size: 32),
+                            title: Text('Google Home / Apple Home'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'speakers',
+                          child: ListTile(
+                            leading: IconBadge(Icons.speaker_rounded, colors: Vivid.speak, size: 32),
+                            title: Text('Loa thông báo'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
                         ),
                         PopupMenuItem(
                           value: 'gateways',
-                          child: ListTile(leading: Icon(Icons.router_rounded), title: Text('Bộ điều khiển trung tâm'), contentPadding: EdgeInsets.zero),
+                          child: ListTile(
+                            leading: IconBadge(Icons.router_rounded, colors: Vivid.gateway, size: 32),
+                            title: Text('Bộ điều khiển trung tâm'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
                         ),
                       ],
                     ],
@@ -231,7 +256,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             // Thanh tab các phòng (ghim dưới thanh tiêu đề khi cuộn).
-            if (!noDevicesAnywhere)
+            // Quản trị viên luôn thấy thanh tab để có nút thêm phòng ở cuối.
+            if (!noDevicesAnywhere || home.isAdmin)
               SliverPersistentHeader(
                 pinned: true,
                 delegate: _RoomTabsHeader(
@@ -239,6 +265,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   selected: selected,
                   background: Theme.of(context).scaffoldBackgroundColor,
                   onSelect: (k) => setState(() => _tab = k),
+                  onAdd: home.isAdmin ? () => showRoomSheet(context, m) : null,
                 ),
               ),
             SliverPadding(
@@ -253,15 +280,6 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-      floatingActionButton: home.isAdmin
-          ? FloatingActionButton.extended(
-              backgroundColor: cs.primaryContainer,
-              foregroundColor: cs.onPrimaryContainer,
-              icon: const Icon(Icons.add_home_work_rounded),
-              label: const Text('Thêm phòng'),
-              onPressed: () => showRoomSheet(context, m),
-            )
-          : null,
     );
   }
 }
@@ -272,23 +290,45 @@ class _LocationBanner extends StatelessWidget {
   const _LocationBanner({required this.onTap});
 
   @override
+  Widget build(BuildContext context) => _Banner(
+    icon: Icons.location_disabled_rounded,
+    colors: Vivid.leave,
+    title: 'Cần quyền vị trí',
+    info: 'Căn hộ có ngữ cảnh "Tự chuyển khi rời nhà". Cho phép vị trí "Luôn luôn" để điện thoại này báo khi bạn rời nhà, kể cả khi app đã đóng.',
+    action: FilledButton.tonal(onPressed: onTap, child: const Text('Cho phép')),
+  );
+}
+
+/// Dải thông báo gọn: biểu tượng màu + tiêu đề ngắn + "i" + nút.
+class _Banner extends StatelessWidget {
+  final IconData icon;
+  final List<Color> colors;
+  final String title;
+  final String? info;
+  final Widget? action;
+  const _Banner({required this.icon, required this.colors, required this.title, this.info, this.action});
+
+  @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
-      decoration: BoxDecoration(color: cs.errorContainer, borderRadius: BorderRadius.circular(18)),
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        gradient: LinearGradient(colors: [colors.first.withValues(alpha: .14), colors.last.withValues(alpha: .08)]),
+        border: Border.all(color: colors.first.withValues(alpha: .25)),
+      ),
       child: Row(
         children: [
-          Icon(Icons.location_off_rounded, color: cs.onErrorContainer),
+          IconBadge(icon, colors: colors, size: 38),
           const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Cho phép vị trí "Luôn luôn" để ngữ cảnh tự chạy khi bạn rời nhà',
-              style: TextStyle(color: cs.onErrorContainer, fontWeight: FontWeight.w600),
-            ),
+          Flexible(
+            child: Text(title, style: tt.titleSmall, maxLines: 2, overflow: TextOverflow.ellipsis),
           ),
-          TextButton(onPressed: onTap, child: const Text('Cho phép')),
+          if (info != null) InfoTip(title, info!),
+          const Spacer(),
+          ?action,
         ],
       ),
     );
@@ -302,37 +342,24 @@ class _ModeBanner extends StatelessWidget {
   const _ModeBanner({required this.scene, required this.onOff});
 
   @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
-      decoration: BoxDecoration(color: cs.tertiaryContainer, borderRadius: BorderRadius.circular(18)),
-      child: Row(
-        children: [
-          Icon(scene.kind.icon, color: cs.onTertiaryContainer),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Chế độ "${scene.name}" đang bật · cảnh báo ${scene.alertDevices.length} cảm biến',
-              style: TextStyle(color: cs.onTertiaryContainer, fontWeight: FontWeight.w600),
-            ),
-          ),
-          TextButton(
-            onPressed: () async {
-              final msg = ScaffoldMessenger.of(context);
-              try {
-                await onOff();
-              } catch (e) {
-                msg.showSnackBar(SnackBar(content: Text(e.toString())));
-              }
-            },
-            child: const Text('Tắt'),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => _Banner(
+    icon: scene.kind.icon,
+    colors: sceneColors(scene.kind.id),
+    title: '${scene.name} · ${scene.alertDevices.length} cảm biến',
+    info:
+        'Ngữ cảnh "${scene.name}" đang bật: mỗi khi ${scene.alertDevices.length} cảm biến đã chọn phát hiện có người hoặc cửa mở, thành viên nhận thông báo. Bấm Tắt để ngừng canh.',
+    action: FilledButton.tonal(
+      onPressed: () async {
+        final msg = ScaffoldMessenger.of(context);
+        try {
+          await onOff();
+        } catch (e) {
+          msg.showSnackBar(SnackBar(content: Text(e.toString())));
+        }
+      },
+      child: const Text('Tắt'),
+    ),
+  );
 }
 
 /// Khách thuê: hiện thời gian còn lại, và tự thoát khi hết hạn (phòng khi mất kết nối WebSocket).
@@ -367,25 +394,13 @@ class _RenterBannerState extends State<_RenterBanner> {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final left = widget.until.difference(DateTime.now());
     final soon = left < const Duration(hours: 1);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(color: soon ? cs.errorContainer : cs.secondaryContainer, borderRadius: BorderRadius.circular(18)),
-      child: Row(
-        children: [
-          Icon(Icons.timer_outlined, color: soon ? cs.onErrorContainer : cs.onSecondaryContainer),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Quyền khách thuê còn ${fmtRemaining(left)} · hết lúc ${fmtDateTime(widget.until)}. Bạn chỉ bật/tắt được thiết bị.',
-              style: TextStyle(color: soon ? cs.onErrorContainer : cs.onSecondaryContainer, fontWeight: FontWeight.w600),
-            ),
-          ),
-        ],
-      ),
+    return _Banner(
+      icon: Icons.timer_rounded,
+      colors: soon ? Vivid.danger : Vivid.timer,
+      title: 'Còn ${fmtRemaining(left)}',
+      info: 'Quyền khách thuê hết lúc ${fmtDateTime(widget.until)}. Bạn chỉ bật/tắt được thiết bị.',
     );
   }
 }
@@ -403,7 +418,8 @@ class _RoomTabsHeader extends SliverPersistentHeaderDelegate {
   final String selected;
   final Color background;
   final ValueChanged<String> onSelect;
-  const _RoomTabsHeader({required this.tabs, required this.selected, required this.background, required this.onSelect});
+  final VoidCallback? onAdd; // null = không có quyền thêm phòng
+  const _RoomTabsHeader({required this.tabs, required this.selected, required this.background, required this.onSelect, this.onAdd});
 
   static const _height = 62.0;
   @override
@@ -423,9 +439,27 @@ class _RoomTabsHeader extends SliverPersistentHeaderDelegate {
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-        itemCount: tabs.length,
+        itemCount: tabs.length + (onAdd == null ? 0 : 1),
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (_, i) {
+          if (i == tabs.length) {
+            // Nút thêm phòng: tab cuối cùng, viền màu chủ đạo.
+            return Tooltip(
+              message: 'Thêm phòng',
+              child: Material(
+                color: cs.primaryContainer,
+                shape: StadiumBorder(side: BorderSide(color: cs.primary.withValues(alpha: .5))),
+                child: InkWell(
+                  customBorder: const StadiumBorder(),
+                  onTap: onAdd,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    child: Icon(Icons.add_rounded, color: cs.primary),
+                  ),
+                ),
+              ),
+            );
+          }
           final t = tabs[i];
           final on = t.key == selected;
           final fg = on ? cs.onPrimary : cs.onSurfaceVariant;
@@ -487,69 +521,101 @@ class _SummaryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(18),
+    // Màu thẻ đổi theo ngữ cảnh đang bật; chưa có ngữ cảnh thì dùng màu chủ đạo.
+    final base = scene != null ? sceneColors(scene!.kind.id) : [cs.primary, Color.lerp(cs.primary, const Color(0xFF60A5FA), .6)!];
+    final colors = [Color.lerp(base.first, Colors.black, .0)!, Color.lerp(base.last, Colors.black, .08)!];
+
+    Widget circle(double size, double alpha) => Container(
+      width: size,
+      height: size,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(26),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [cs.primary, Color.lerp(cs.primary, const Color(0xFF0B5FA5), .55)!],
-        ),
+        shape: BoxShape.circle,
+        color: Colors.white.withValues(alpha: alpha),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(color: Colors.white.withValues(alpha: .18), borderRadius: BorderRadius.circular(20)),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(gatewayOnline ? Icons.cloud_done_rounded : Icons.cloud_off_rounded, size: 16, color: Colors.white),
-                    const SizedBox(width: 6),
-                    Text(
-                      gatewayOnline ? 'Đã kết nối' : 'Mất kết nối',
-                      style: tt.labelMedium?.copyWith(color: Colors.white, fontWeight: FontWeight.w600),
-                    ),
-                  ],
+    );
+
+    final status = Semantics(
+      label: gatewayOnline ? 'Đã kết nối' : 'Mất kết nối',
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Icon(gatewayOnline ? Icons.cloud_done_rounded : Icons.cloud_off_rounded, size: 24, color: Colors.white),
+            Positioned(
+              right: -3,
+              bottom: -3,
+              child: Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: gatewayOnline ? const Color(0xFF4ADE80) : const Color(0xFFF87171),
+                  border: Border.all(color: colors.last, width: 2),
                 ),
               ),
-            ],
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final sceneRow = Row(
+      children: [
+        Icon(scene?.kind.icon ?? Icons.auto_awesome_rounded, color: Colors.white, size: 34),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            scene?.name ?? 'Chọn ngữ cảnh',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: tt.headlineSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.w800, letterSpacing: -.3),
           ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              _Stat(value: '$on', label: 'Đang bật', icon: Icons.power_settings_new_rounded),
-              _Stat(value: '$online/$total', label: 'Thiết bị online', icon: Icons.devices_rounded),
-              if (showScene)
-                Expanded(
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: onPickScene,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(scene?.kind.icon ?? Icons.auto_awesome_rounded, size: 18, color: Colors.white.withValues(alpha: .85)),
-                        const SizedBox(height: 6),
-                        // Cùng cỡ chữ với các số ở hai ô bên cạnh; tên dài thì thu nhỏ cho vừa ô.
-                        FittedBox(
-                          fit: BoxFit.scaleDown,
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            scene?.name ?? 'Chưa chọn',
-                            maxLines: 1,
-                            style: tt.headlineSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.w800),
-                          ),
-                        ),
-                      ],
+        ),
+        const SizedBox(width: 8),
+        status,
+      ],
+    );
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(28),
+        gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: colors),
+        boxShadow: [BoxShadow(color: colors.last.withValues(alpha: .35), blurRadius: 24, offset: const Offset(0, 10))],
+      ),
+      child: Stack(
+        children: [
+          Positioned(top: -50, right: -30, child: circle(150, .10)),
+          Positioned(bottom: -70, left: -40, child: circle(160, .07)),
+          Material(
+            type: MaterialType.transparency,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Chỉ hiện hàng ngữ cảnh khi đang có ngữ cảnh được kích hoạt.
+                  if (showScene && scene != null) ...[
+                    Semantics(
+                      button: true,
+                      label: 'Ngữ cảnh: ${scene!.name}',
+                      child: InkWell(borderRadius: BorderRadius.circular(18), onTap: onPickScene, child: sceneRow),
                     ),
+                    const SizedBox(height: 16),
+                  ],
+                  Row(
+                    children: [
+                      _Stat(value: '$on', label: 'Đang bật', icon: Icons.power_settings_new_rounded),
+                      const SizedBox(width: 10),
+                      _Stat(value: '$online/$total', label: 'Thiết bị online', icon: Icons.wifi_rounded, progress: total == 0 ? null : online / total),
+                      if (!(showScene && scene != null)) ...[const SizedBox(width: 10), status],
+                    ],
                   ),
-                ),
-            ],
+                ],
+              ),
+            ),
           ),
         ],
       ),
@@ -560,7 +626,8 @@ class _SummaryCard extends StatelessWidget {
 class _Stat extends StatelessWidget {
   final String value, label;
   final IconData icon;
-  const _Stat({required this.value, required this.label, required this.icon});
+  final double? progress;
+  const _Stat({required this.value, required this.label, required this.icon, this.progress});
 
   @override
   Widget build(BuildContext context) {
@@ -569,16 +636,43 @@ class _Stat extends StatelessWidget {
       child: Semantics(
         label: '$label: $value', // không hiện chữ nhưng đọc được bằng trình đọc màn hình
         child: ExcludeSemantics(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(icon, size: 18, color: Colors.white.withValues(alpha: .85)),
-              const SizedBox(height: 6),
-              Text(
-                value,
-                style: tt.headlineSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.w800),
-              ),
-            ],
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(10, 10, 14, 10),
+            decoration: BoxDecoration(color: const Color(0x29FFFFFF), borderRadius: BorderRadius.circular(18)),
+            child: Row(
+              children: [
+                Icon(icon, size: 26, color: Colors.white),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          value,
+                          style: tt.titleLarge?.copyWith(color: Colors.white, fontWeight: FontWeight.w800, height: 1.1),
+                        ),
+                      ),
+                      if (progress != null) ...[
+                        const SizedBox(height: 6),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: progress,
+                            minHeight: 4,
+                            color: Colors.white,
+                            backgroundColor: Colors.white.withValues(alpha: .22),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -622,15 +716,7 @@ class _RoomSection extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
                     child: Row(
                       children: [
-                        Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: onCount > 0 ? cs.primary : cs.primaryContainer.withValues(alpha: .7),
-                            borderRadius: BorderRadius.circular(13),
-                          ),
-                          child: Icon(icon, size: 22, color: onCount > 0 ? cs.onPrimary : cs.onPrimaryContainer),
-                        ),
+                        IconBadge(icon, colors: roomColors(room?.kind.id), size: 42),
                         const SizedBox(width: 12),
                         Expanded(
                           child: Column(
@@ -642,9 +728,12 @@ class _RoomSection extends StatelessWidget {
                                 overflow: TextOverflow.ellipsis,
                                 style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w700),
                               ),
-                              Text(
-                                '${devices.length} thiết bị${onCount > 0 ? ' · $onCount đang bật' : ''}',
-                                style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                              const SizedBox(height: 3),
+                              Row(
+                                children: [
+                                  Pill(Icons.devices_rounded, '${devices.length}'),
+                                  if (onCount > 0) ...[const SizedBox(width: 6), Pill(Icons.power_settings_new_rounded, '$onCount', color: cs.primary)],
+                                ],
                               ),
                             ],
                           ),
@@ -656,9 +745,9 @@ class _RoomSection extends StatelessWidget {
                 ),
               ),
               if (canOff)
-                TextButton.icon(
-                  icon: const Icon(Icons.power_settings_new_rounded, size: 18),
-                  label: const Text('Tắt hết'),
+                IconButton.filledTonal(
+                  icon: const Icon(Icons.power_settings_new_rounded),
+                  tooltip: 'Tắt hết',
                   onPressed: () {
                     HapticFeedback.mediumImpact();
                     for (final d in onDevices) {
@@ -672,9 +761,11 @@ class _RoomSection extends StatelessWidget {
         if (devices.isEmpty)
           Padding(
             padding: const EdgeInsets.only(left: 4, bottom: 4),
-            child: Text(
-              'Chưa có thiết bị trong phòng này. Bấm bút chì trên thiết bị để chuyển vào đây.',
-              style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+            child: Row(
+              children: [
+                Pill(Icons.inbox_rounded, 'Trống'),
+                InfoTip('Phòng trống', 'Bấm biểu tượng bút chì trên một thiết bị để chuyển thiết bị vào phòng này.'),
+              ],
             ),
           ),
         for (final d in devices)
@@ -700,6 +791,15 @@ class _DeviceCard extends StatelessWidget {
     return d.isSensor ? Icons.sensors_rounded : Icons.toggle_on_rounded;
   }
 
+  List<Color> get _colors {
+    final d = device;
+    if (d.kind == 'light') return const [Color(0xFFFBBF24), Color(0xFFF97316)];
+    if (d.isCover) return const [Color(0xFF3B82F6), Color(0xFF06B6D4)];
+    if (d.isPlug) return Vivid.power;
+    if (d.isSensor) return const [Color(0xFF8B5CF6), Color(0xFF6366F1)];
+    return Vivid.device;
+  }
+
   @override
   Widget build(BuildContext context) {
     final m = context.read<AppModel>();
@@ -723,12 +823,9 @@ class _DeviceCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    AnimatedContainer(
+                    AnimatedSwitcher(
                       duration: const Duration(milliseconds: 220),
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(color: anyOn ? cs.primary : cs.surfaceContainerHighest, borderRadius: BorderRadius.circular(14)),
-                      child: Icon(_icon, color: anyOn ? cs.onPrimary : cs.onSurfaceVariant),
+                      child: IconBadge(_icon, key: ValueKey(anyOn), colors: _colors, size: 46, muted: !anyOn && !d.isSensor),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -925,13 +1022,7 @@ class _ChannelTile extends StatelessWidget {
               padding: const EdgeInsets.all(12),
               child: Row(
                 children: [
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(color: on ? cs.primary : cs.surface, shape: BoxShape.circle),
-                    child: Icon(icon, size: 20, color: on ? cs.onPrimary : cs.onSurfaceVariant),
-                  ),
+                  IconBadge(icon, colors: Vivid.device, size: 34, muted: !on),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(
@@ -1031,29 +1122,5 @@ class _EmptyBlock extends StatelessWidget {
   const _EmptyBlock({required this.icon, required this.title, required this.message, this.action});
 
   @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 16),
-      child: Column(
-        children: [
-          Container(
-            width: 84,
-            height: 84,
-            decoration: BoxDecoration(color: cs.primaryContainer.withValues(alpha: .6), shape: BoxShape.circle),
-            child: Icon(icon, size: 40, color: cs.primary),
-          ),
-          const SizedBox(height: 16),
-          Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 6),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: TextStyle(color: cs.onSurfaceVariant),
-          ),
-          if (action != null) ...[const SizedBox(height: 16), action!],
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => EmptyState(icon: icon, colors: Vivid.gateway, title: title, info: message, action: action);
 }

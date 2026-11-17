@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../app_model.dart';
+import '../widgets/ui.dart';
 
 /// Quản lý bộ điều khiển trung tâm (Raspberry Pi chạy Zigbee2MQTT) của căn hộ. Chỉ admin/owner.
 class GatewaysScreen extends StatefulWidget {
@@ -93,11 +94,10 @@ class _GatewaysScreenState extends State<GatewaysScreen> {
 
   Future<void> _showToken(String wsUrl, String token) {
     final env = 'CLOUD_WS_URL=$wsUrl\nGATEWAY_TOKEN=$token';
-    return showModalBottomSheet<void>(
+    return showCenterSheet<void>(
       context: context,
-      isScrollControlled: true,
-      isDismissible: false,
-      enableDrag: false,
+      barrierDismissible: false,
+      topPadding: 0,
       builder: (c) {
         final cs = Theme.of(c).colorScheme;
         final tt = Theme.of(c).textTheme;
@@ -110,12 +110,7 @@ class _GatewaysScreenState extends State<GatewaysScreen> {
               children: [
                 Row(
                   children: [
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(16)),
-                      child: Icon(Icons.vpn_key_rounded, color: cs.onPrimaryContainer),
-                    ),
+                    const IconBadge(Icons.vpn_key_rounded, colors: Vivid.timer, size: 48),
                     const SizedBox(width: 14),
                     Expanded(
                       child: Text('Mã kết nối', style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
@@ -133,22 +128,14 @@ class _GatewaysScreenState extends State<GatewaysScreen> {
                   child: SelectableText(env, style: const TextStyle(fontFamily: 'Menlo', fontSize: 12)),
                 ),
                 const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(color: cs.errorContainer, borderRadius: BorderRadius.circular(14)),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.info_outline_rounded, size: 18, color: cs.onErrorContainer),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Mã chỉ hiện một lần và không xem lại được. Mất mã thì chọn "Đổi mã kết nối". Không chia sẻ cho người khác.',
-                          style: tt.bodySmall?.copyWith(color: cs.onErrorContainer),
-                        ),
-                      ),
-                    ],
-                  ),
+                Row(
+                  children: [
+                    Pill(Icons.visibility_off_rounded, 'Chỉ hiện một lần', color: cs.error),
+                    const InfoTip(
+                      'Giữ bí mật mã này',
+                      'Mã chỉ hiện một lần và không xem lại được. Mất mã thì chọn "Đổi mã kết nối". Không chia sẻ cho người khác: ai có mã đều kết nối được vào căn hộ.',
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 16),
                 Row(
@@ -231,7 +218,13 @@ class _GatewaysScreenState extends State<GatewaysScreen> {
         onRefresh: () async => setState(_load),
         child: CustomScrollView(
           slivers: [
-            const SliverAppBar.large(title: Text('Bộ điều khiển')),
+            SliverAppBar.large(
+              title: const Text('Bộ điều khiển'),
+              actions: [
+                HeaderAction(icon: Icons.add_rounded, tooltip: 'Thêm bộ điều khiển', onPressed: _add),
+                const SizedBox(width: 8),
+              ],
+            ),
             FutureBuilder<Map<String, dynamic>>(
               future: _future,
               builder: (_, snap) {
@@ -250,17 +243,12 @@ class _GatewaysScreenState extends State<GatewaysScreen> {
                           gradient: LinearGradient(
                             begin: Alignment.topLeft,
                             end: Alignment.bottomRight,
-                            colors: online ? [cs.primary, Color.lerp(cs.primary, const Color(0xFF0B5FA5), .55)!] : [cs.outline, cs.outlineVariant],
+                            colors: online ? [cs.primary, Color.lerp(cs.primary, const Color(0xFF60A5FA), .55)!] : [cs.outline, cs.outlineVariant],
                           ),
                         ),
                         child: Row(
                           children: [
-                            Container(
-                              width: 52,
-                              height: 52,
-                              decoration: BoxDecoration(color: Colors.white.withValues(alpha: .2), borderRadius: BorderRadius.circular(16)),
-                              child: Icon(online ? Icons.cloud_done_rounded : Icons.cloud_off_rounded, color: Colors.white, size: 28),
-                            ),
+                            SizedBox(width: 52, child: Icon(online ? Icons.cloud_done_rounded : Icons.cloud_off_rounded, color: Colors.white, size: 40)),
                             const SizedBox(width: 14),
                             Expanded(
                               child: Column(
@@ -279,26 +267,12 @@ class _GatewaysScreenState extends State<GatewaysScreen> {
                       ),
                       const SizedBox(height: 18),
                       if (list.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 12),
-                          child: Column(
-                            children: [
-                              Container(
-                                width: 84,
-                                height: 84,
-                                decoration: BoxDecoration(color: cs.primaryContainer.withValues(alpha: .6), shape: BoxShape.circle),
-                                child: Icon(Icons.router_outlined, size: 40, color: cs.primary),
-                              ),
-                              const SizedBox(height: 16),
-                              Text('Chưa có bộ điều khiển', style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-                              const SizedBox(height: 6),
-                              Text(
-                                'Bấm "Thêm" để tạo mã kết nối cho Raspberry Pi (Zigbee2MQTT). Thiết bị sẽ tự xuất hiện sau khi Pi kết nối.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(color: cs.onSurfaceVariant),
-                              ),
-                            ],
-                          ),
+                        const EmptyState(
+                          icon: Icons.router_rounded,
+                          colors: Vivid.gateway,
+                          title: 'Chưa có bộ điều khiển',
+                          info:
+                              'Bấm "Thêm" để tạo mã kết nối cho Raspberry Pi (Zigbee2MQTT) hoặc cho máy chạy gateway loa. Thiết bị sẽ tự xuất hiện sau khi bộ điều khiển kết nối.',
                         ),
                       for (final g in list)
                         Padding(
@@ -308,15 +282,7 @@ class _GatewaysScreenState extends State<GatewaysScreen> {
                               padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
                               child: Row(
                                 children: [
-                                  Container(
-                                    width: 48,
-                                    height: 48,
-                                    decoration: BoxDecoration(
-                                      color: g['online'] == true ? cs.primaryContainer : cs.surfaceContainerHighest,
-                                      borderRadius: BorderRadius.circular(15),
-                                    ),
-                                    child: Icon(Icons.router_rounded, color: g['online'] == true ? cs.onPrimaryContainer : cs.onSurfaceVariant),
-                                  ),
+                                  IconBadge(Icons.router_rounded, colors: Vivid.gateway, size: 48, muted: g['online'] != true),
                                   const SizedBox(width: 14),
                                   Expanded(
                                     child: Column(
@@ -383,7 +349,6 @@ class _GatewaysScreenState extends State<GatewaysScreen> {
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(onPressed: _add, icon: const Icon(Icons.add_rounded), label: const Text('Thêm')),
     );
   }
 }

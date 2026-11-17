@@ -10,6 +10,8 @@ use uuid::Uuid;
 
 struct GwConn {
     home_id: Uuid,
+    /// Khả năng gateway tự khai báo (`z2m`, `cast`). Rỗng = gateway cũ: coi là có Zigbee2MQTT, không có Cast.
+    caps: std::sync::Mutex<Vec<String>>,
     tx: mpsc::Sender<String>,
     kill: Arc<Notify>,
 }
@@ -35,7 +37,13 @@ pub struct Hub {
 
 impl Hub {
     pub fn register_gateway(&self, gw: Uuid, home_id: Uuid, tx: mpsc::Sender<String>, kill: Arc<Notify>) {
-        self.gateways.insert(gw, GwConn { home_id, tx, kill });
+        self.gateways.insert(gw, GwConn { home_id, caps: Default::default(), tx, kill });
+    }
+
+    pub fn set_caps(&self, gw: Uuid, caps: Vec<String>) {
+        if let Some(c) = self.gateways.get(&gw) {
+            *c.caps.lock().unwrap() = caps;
+        }
     }
 
     /// Ngắt kết nối đang mở của gateway (khi thu hồi token / xoá gateway).
@@ -45,9 +53,24 @@ impl Hub {
         }
     }
 
-    /// Gateway đang kết nối của một căn hộ (mỗi căn hộ dùng một Matter bridge).
+    /// Gateway chỉ làm việc với loa Cast (không có Zigbee2MQTT / Matter bridge): chạy ở máy cùng LAN với loa.
+    fn cast_only(c: &GwConn) -> bool {
+        let caps = c.caps.lock().unwrap();
+        caps.iter().any(|x| x == "cast") && !caps.iter().any(|x| x == "z2m")
+    }
+
+    /// Gateway Zigbee/Matter đang kết nối của một căn hộ (mỗi căn hộ dùng một Matter bridge); bỏ qua gateway chỉ làm loa Cast.
     pub fn gateway_for_home(&self, home_id: Uuid) -> Option<Uuid> {
-        self.gateways.iter().find(|g| g.home_id == home_id).map(|g| *g.key())
+        self.gateways.iter().find(|g| g.home_id == home_id && !Self::cast_only(&g)).map(|g| *g.key())
+    }
+
+    /// Mọi gateway đang kết nối của căn hộ có khả năng cast tới loa (mDNS chạy được).
+    pub fn cast_gateways_for_home(&self, home_id: Uuid) -> Vec<Uuid> {
+        self.gateways.iter().filter(|g| g.home_id == home_id && g.caps.lock().unwrap().iter().any(|x| x == "cast")).map(|g| *g.key()).collect()
+    }
+
+    pub fn gateway_connected_for(&self, home_id: Uuid, gw: Uuid) -> bool {
+        self.gateways.get(&gw).is_some_and(|g| g.home_id == home_id)
     }
 
     /// Gửi yêu cầu xuống gateway và chờ bản tin trả lời cùng `id`. Bí mật (mã ghép nối) chỉ đi qua RAM.
@@ -86,7 +109,7 @@ impl Hub {
     }
 
     pub fn gateway_online(&self, home_id: Uuid) -> bool {
-        self.gateways.iter().any(|g| g.home_id == home_id)
+        self.gateways.iter().any(|g| g.home_id == home_id && !Self::cast_only(&g))
     }
 
     /// Gửi lệnh xuống gateway. false = gateway offline / nghẽn.

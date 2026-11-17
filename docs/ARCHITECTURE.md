@@ -90,6 +90,16 @@ Migration 0009: `device_rules(kind auto_off|auto_on|link, key, delay_s, source_*
 - Đổi cấu hình luật (PATCH) xoá hẹn giờ đang chờ của luật đó; xoá luật/thiết bị xoá hẹn giờ theo (CASCADE).
 - Chưa làm: luật cho rèm (OPEN/CLOSE), điều kiện theo giờ trong ngày, trễ cho luật `link`, nhật ký "luật đã chạy" trong lịch sử thông báo.
 
+## 4g. Thông báo giọng nói (Google Cast)
+
+Migration 0010: `speakers(home_id, name, cast_id, host, port)` (`cast_id` = TXT `id` của mDNS, ổn định; `host` chỉ là địa chỉ lần cuối) và cột `speaker_ids uuid[]`, `speak_text` trên `scenes` và `device_rules`. `backend/src/speak.rs`: CRUD loa, `scan` (gửi `cast_scan` xuống gateway bằng `hub.request_gateway`, nhận `cast_reply`), `say` (gửi `speak` fire-and-forget xuống gateway của căn hộ). Điểm gọi: `alerts::scene_auto_ran` (ngữ cảnh tự chạy thành công) và `rules.rs` (`run_due` cho hẹn giờ, `handle` cho `link`; chỉ khi thật sự đã gửi lệnh, không đọc khi gang đã ở trạng thái đích).
+
+Gateway (`gateway/src/cast.rs`): luồng mDNS (`mdns-sd`) giữ danh sách loa đang thấy; `speak` tải mp3 một lần (`reqwest`, `TTS_URL_TEMPLATE`), mỗi loa một hàng đợi (`tokio::Mutex` theo cast_id), đăng ký tệp với tên ngẫu nhiên 128 bit (hết hạn sau 5 phút) trong máy chủ HTTP tối giản (hỗ trợ Range), tự chọn địa chỉ LAN của Pi bằng UDP connect tới IP loa (hoặc `CAST_ADVERTISE_HOST`), rồi nói CASTV2 tự viết (protobuf `prost` + `tokio-rustls` bỏ kiểm tra chứng chỉ vì loa dùng chứng chỉ tự ký): CONNECT → LAUNCH `CC1AD845` → CONNECT tới transportId → LOAD → chờ `IDLE/FINISHED` (trả lời PING, gửi PING định kỳ) → STOP.
+
+- Nhiều gateway một căn hộ: gateway khai báo `hello {caps: [z2m, cast]}` ngay sau khi kết nối; `Hub::gateway_for_home` (Matter, trạng thái "online") bỏ qua gateway chỉ có `cast`; `scan` hỏi mọi gateway `cast` song song rồi gộp theo `cast_id`, gắn `gateway_id` đã thấy loa; `say` gom loa theo `speakers.gateway_id` (migration 0011) và chỉ gửi cho gateway đó. Gateway cũ chưa gửi `hello` được coi là Zigbee, không cast.
+- Giới hạn/rủi ro: TTS là endpoint không chính thức; CASTV2 chưa thử với thiết bị thật; phát tin làm gián đoạn nhạc đang chạy trên loa; không có hàng đợi bền (gateway mất kết nối hoặc loa tắt lúc đó thì câu bị bỏ); loa phải cùng LAN và truy cập được cổng HTTP của gateway; backend ghi nhận loa theo gateway đầu tiên của căn hộ (`gateway_for_home`).
+- Chưa làm: chọn giọng/tốc độ, âm lượng, cảnh báo khẩn cấp ưu tiên ngắt nhạc, đọc cho thông báo cảm biến (chỉ ngữ cảnh/luật tự chạy), Google Cloud TTS chính thức.
+
 ## 5. Bảo mật — đã làm / còn thiếu
 
 Đã có: mật khẩu argon2 (tối đa 4 lần băm đồng thời để không bị bóp RAM/CPU); gateway/invite token 256-bit chỉ lưu hash SHA-256, hiển thị 1 lần; mã mời dùng 1 lần có hạn; whitelist payload lệnh; agent từ chối tên thiết bị chứa `/ # +` (chống topic injection); container chạy non-root; người ngoài nhận 404; và ba mục dưới đây.

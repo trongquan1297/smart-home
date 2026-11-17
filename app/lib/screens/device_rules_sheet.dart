@@ -2,14 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../app_model.dart';
 import '../models.dart';
+import '../widgets/ui.dart';
+import 'speak_picker.dart';
 
 /// Màn cài đặt luật tự động (biểu tượng tia sét) cho một thiết bị: chọn gang, rồi đặt
 /// tự tắt sau khi bật, tự bật lại sau khi tắt, và đồng kích hoạt theo gang của thiết bị khác.
 Future<void> showDeviceRulesSheet(BuildContext context, AppModel m, Device d) {
-  return showModalBottomSheet<void>(
+  return showCenterSheet<void>(
     context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
     builder: (_) => _RulesSheet(model: m, device: d),
   );
 }
@@ -70,6 +70,13 @@ class _RulesSheetState extends State<_RulesSheet> {
     if (s != null) await _run(() => m.api.updateRule(r.id, {'delay_s': s}));
   }
 
+  Future<void> _speak(DeviceRule r, String hint) async {
+    final res = await showSpeakDialog(context, m, ids: r.speakerIds, text: r.speakText, hint: hint);
+    if (res != null) await _run(() => m.api.updateRule(r.id, {'speaker_ids': res.ids, 'speak_text': res.text}));
+  }
+
+  String _speakLabel(DeviceRule r) => r.speakerIds.isEmpty ? 'Đọc qua loa: tắt' : 'Đọc qua loa: ${r.speakerIds.length} loa';
+
   Future<void> _addLink() async {
     final body = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -98,14 +105,14 @@ class _RulesSheetState extends State<_RulesSheet> {
             children: [
               Row(
                 children: [
-                  Icon(Icons.bolt_rounded, color: cs.primary),
-                  const SizedBox(width: 8),
+                  const IconBadge(Icons.bolt_rounded, colors: Vivid.timer, size: 40),
+                  const SizedBox(width: 12),
                   Expanded(
-                    child: Text(
-                      'Tự động hoá · ${d.name}',
-                      style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w800),
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    child: Text(d.name, style: tt.titleLarge, overflow: TextOverflow.ellipsis),
+                  ),
+                  const InfoTip(
+                    'Tự động hoá',
+                    'Luật chạy trên máy chủ nên cần bộ điều khiển trung tâm online. Áp dụng cho mọi cách bật/tắt: app, ngữ cảnh, Google Home, công tắc vật lý (nếu công tắc báo trạng thái). Hẹn giờ bị huỷ nếu gang đổi trạng thái trước hạn.',
                   ),
                 ],
               ),
@@ -118,50 +125,51 @@ class _RulesSheetState extends State<_RulesSheet> {
                   ],
                 ),
               ],
-              const SizedBox(height: 8),
-              _timerTile('auto_off', 'Tự tắt sau khi bật', 'Tắt sau'),
-              _timerTile('auto_on', 'Tự bật lại sau khi tắt', 'Bật lại sau'),
+              const SizedBox(height: 16),
+              _timerTile('auto_off', 'Tự tắt', Icons.timer_off_rounded, Vivid.timer, 'Gang đang bật được bao lâu thì tự tắt.'),
+              _timerTile('auto_on', 'Tự bật lại', Icons.restart_alt_rounded, Vivid.power, 'Gang đang tắt được bao lâu thì tự bật lại.'),
               const Divider(height: 28),
-              Text('Đồng kích hoạt', style: tt.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-              const SizedBox(height: 2),
-              Text(
-                'Khi một gang khác bật hoặc tắt thì gang "${d.labelFor(_key)}" cũng bật hoặc tắt theo. Chỉ một bước: gang bị luật điều khiển không kích hoạt tiếp luật khác.',
-                style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+              SectionHeader(
+                icon: Icons.link_rounded,
+                colors: Vivid.link,
+                title: 'Đồng kích hoạt',
+                info:
+                    'Khi một gang khác bật hoặc tắt thì gang "${d.labelFor(_key)}" cũng bật hoặc tắt theo. Chỉ một bước: gang bị luật điều khiển không kích hoạt tiếp luật khác (tránh vòng lặp).',
+                trailing: IconButton.filledTonal(onPressed: _busy ? null : _addLink, icon: const Icon(Icons.add_rounded), tooltip: 'Thêm'),
               ),
-              const SizedBox(height: 6),
               for (final r in _links)
                 ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.link_rounded, color: r.enabled ? cs.primary : cs.outline),
-                  title: Text(
-                    'Khi ${_deviceName(r.sourceDeviceId ?? '')} · ${_gangName(r.sourceDeviceId ?? '', r.sourceKey ?? '')} ${r.sourceState == 'ON' ? 'bật' : 'tắt'}',
+                  leading: IconBadge(
+                    r.sourceState == 'ON' ? Icons.toggle_on_rounded : Icons.toggle_off_rounded,
+                    colors: Vivid.link,
+                    size: 36,
+                    muted: !r.enabled,
                   ),
-                  subtitle: Text('→ gang này ${r.targetState == 'ON' ? 'bật' : 'tắt'}'),
+                  title: Text(
+                    '${_deviceName(r.sourceDeviceId ?? '')} · ${_gangName(r.sourceDeviceId ?? '', r.sourceKey ?? '')}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Row(
+                    children: [
+                      Pill(Icons.power_settings_new_rounded, r.sourceState == 'ON' ? 'bật' : 'tắt'),
+                      const Padding(padding: EdgeInsets.symmetric(horizontal: 4), child: Icon(Icons.arrow_forward_rounded, size: 16)),
+                      Pill(Icons.power_settings_new_rounded, r.targetState == 'ON' ? 'bật' : 'tắt', color: Vivid.link.first),
+                    ],
+                  ),
                   trailing: IconButton(
                     icon: const Icon(Icons.delete_outline_rounded),
                     tooltip: 'Xoá',
                     onPressed: _busy ? null : () => _run(() => m.api.deleteRule(r.id)),
                   ),
                 ),
-              if (_links.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Text('Chưa có.', style: TextStyle(color: cs.onSurfaceVariant)),
-                ),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: OutlinedButton.icon(onPressed: _busy ? null : _addLink, icon: const Icon(Icons.add_rounded), label: const Text('Thêm đồng kích hoạt')),
-              ),
+              if (_links.isEmpty) const Pill(Icons.inbox_rounded, 'Chưa có'),
               if (_error != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 10),
                   child: Text(_error!, style: TextStyle(color: cs.error)),
                 ),
-              const SizedBox(height: 8),
-              Text(
-                'Luật chạy trên máy chủ nên cần bộ điều khiển trung tâm online; áp dụng cho mọi cách bật/tắt (app, ngữ cảnh, công tắc vật lý). Hẹn giờ bị huỷ nếu gang được đổi trạng thái trước hạn.',
-                style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-              ),
             ],
           ),
         ),
@@ -169,24 +177,44 @@ class _RulesSheetState extends State<_RulesSheet> {
     );
   }
 
-  Widget _timerTile(String kind, String title, String prefix) {
+  Widget _timerTile(String kind, String title, IconData icon, List<Color> colors, String info) {
     final r = _timer(kind);
-    return Column(
-      children: [
-        SwitchListTile(contentPadding: EdgeInsets.zero, title: Text(title), value: r != null, onChanged: _busy ? null : (v) => _toggleTimer(kind, v)),
-        if (r != null)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: OutlinedButton.icon(
-                onPressed: _busy ? null : () => _editDelay(r),
-                icon: const Icon(Icons.timer_outlined),
-                label: Text('$prefix ${DeviceRule.delayLabel(r.delaySeconds ?? 0)}'),
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SectionHeader(
+            icon: icon,
+            colors: colors,
+            title: title,
+            info: info,
+            trailing: Switch(value: r != null, onChanged: _busy ? null : (v) => _toggleTimer(kind, v)),
+          ),
+          if (r != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 40),
+              child: Wrap(
+                spacing: 8,
+                children: [
+                  ActionChip(
+                    avatar: const Icon(Icons.timer_rounded, size: 18),
+                    label: Text(DeviceRule.delayLabel(r.delaySeconds ?? 0)),
+                    onPressed: _busy ? null : () => _editDelay(r),
+                  ),
+                  ActionChip(
+                    avatar: Icon(Icons.record_voice_over_rounded, size: 18, color: r.speakerIds.isEmpty ? null : Vivid.speak.first),
+                    label: Text(r.speakerIds.isEmpty ? 'Loa' : '${r.speakerIds.length} loa'),
+                    tooltip: _speakLabel(r),
+                    side: r.speakerIds.isEmpty ? null : BorderSide(color: cs.primary.withValues(alpha: .4)),
+                    onPressed: _busy ? null : () => _speak(r, kind == 'auto_on' ? 'Đã tự động bật lại ${d.name}' : 'Đã tự động tắt ${d.name}'),
+                  ),
+                ],
               ),
             ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 }

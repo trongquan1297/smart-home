@@ -7,6 +7,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../api.dart';
 import '../app_model.dart';
+import '../widgets/ui.dart';
 import '../models.dart';
 
 /// Kết nối Google Home / Apple Home qua Matter: hiện mã QR để quét trong Home app.
@@ -157,18 +158,17 @@ class _MatterScreenState extends State<MatterScreen> {
         ),
       if (info.fabrics.isNotEmpty) ...[
         const SizedBox(height: 22),
-        Text('Đang kết nối', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-        const SizedBox(height: 8),
+        const SectionHeader(
+          icon: Icons.devices_rounded,
+          colors: Vivid.matter,
+          title: 'Đang kết nối',
+          info: 'Các ứng dụng (Apple Home, Google Home…) đang điều khiển căn hộ qua Matter. Bấm biểu tượng ngắt để thu hồi quyền của một ứng dụng.',
+        ),
         for (final f in info.fabrics)
           Card(
             margin: const EdgeInsets.only(bottom: 8),
             child: ListTile(
-              leading: Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(14)),
-                child: Icon(Icons.smartphone_rounded, color: cs.onPrimaryContainer),
-              ),
+              leading: const IconBadge(Icons.smartphone_rounded, colors: Vivid.matter, size: 44),
               title: Text(f.vendor.isNotEmpty ? f.vendor : 'Ứng dụng Matter', style: const TextStyle(fontWeight: FontWeight.w700)),
               subtitle: Text(f.label.isNotEmpty ? f.label : 'Fabric #${f.index}'),
               trailing: IconButton(
@@ -180,8 +180,15 @@ class _MatterScreenState extends State<MatterScreen> {
           ),
       ],
       const SizedBox(height: 22),
-      Text('Hướng dẫn', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-      const SizedBox(height: 8),
+      const SectionHeader(
+        icon: Icons.menu_book_rounded,
+        colors: Vivid.info,
+        title: 'Hướng dẫn',
+        info:
+            'Khi ghép, điện thoại và Raspberry Pi phải cùng mạng Wi‑Fi/LAN. Google Home thường cần một thiết bị trung tâm Matter của Google trong nhà (loa/màn hình Nest hoặc Google TV) — thông báo "Bạn cần có một thiết bị trung tâm chuẩn Matter" là điều kiện của Google Home, không phải lỗi của app. Apple Home cần Apple TV/HomePod để điều khiển khi ở ngoài.\n\n'
+            'Mã QR cho phép thêm người điều khiển ngôi nhà: không chụp màn hình hay gửi cho người khác.\n\n'
+            'Trong Home app: công tắc hiện dưới dạng đèn (mỗi gang một đèn), kèm cảm biến cửa và hiện diện. Thiết bị mới ghép vào Zigbee2MQTT cần khởi động lại dịch vụ Matter trên Pi mới hiện ra.',
+      ),
       const _Guide(
         icon: Icons.home_rounded,
         title: 'Apple Home (iPhone)',
@@ -199,22 +206,6 @@ class _MatterScreenState extends State<MatterScreen> {
           'Chọn thiết bị tương thích Matter (Matter-enabled device).',
           'Quét mã QR ở trên (hoặc nhập mã số), làm theo hướng dẫn.',
         ],
-      ),
-      const SizedBox(height: 6),
-      _Hint(
-        icon: Icons.wifi_rounded,
-        text:
-            'Khi ghép, điện thoại và Raspberry Pi phải cùng mạng Wi‑Fi/LAN. Google Home thường yêu cầu một thiết bị trung tâm Matter của Google trong nhà (loa/màn hình Nest hoặc Google TV tương thích) cùng mạng để thiết lập và điều khiển; nếu thấy thông báo "Bạn cần có một thiết bị trung tâm chuẩn Matter" thì đó là điều kiện của Google Home, không phải lỗi của app. Apple Home cần Apple TV/HomePod để điều khiển khi ở ngoài.',
-      ),
-      const _Hint(
-        icon: Icons.lock_outline_rounded,
-        text:
-            'Mã QR cho phép thêm người điều khiển ngôi nhà: không chụp màn hình hay gửi cho người khác. Có thể ngắt kết nối một ứng dụng bất cứ lúc nào ở danh sách trên.',
-      ),
-      const _Hint(
-        icon: Icons.devices_other_rounded,
-        text:
-            'Các thiết bị sẽ xuất hiện trong Home app: công tắc dưới dạng đèn (mỗi gang một đèn), cảm biến cửa và cảm biến hiện diện. Thiết bị ghép mới vào Zigbee2MQTT cần khởi động lại dịch vụ Matter trên Pi mới hiện ra.',
       ),
     ];
   }
@@ -242,17 +233,12 @@ class _StatusCard extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [cs.primary, Color.lerp(cs.primary, const Color(0xFF0B5FA5), .55)!],
+          colors: [cs.primary, Color.lerp(cs.primary, const Color(0xFF60A5FA), .55)!],
         ),
       ),
       child: Row(
         children: [
-          Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(color: Colors.white.withValues(alpha: .2), borderRadius: BorderRadius.circular(16)),
-            child: Icon(n == 0 ? Icons.hub_outlined : Icons.hub_rounded, color: Colors.white, size: 28),
-          ),
+          SizedBox(width: 52, child: Icon(n == 0 ? Icons.hub_outlined : Icons.hub_rounded, color: Colors.white, size: 40)),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
@@ -341,7 +327,11 @@ class _Guide extends StatelessWidget {
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
-          leading: Icon(icon, color: cs.primary),
+          leading: IconBadge(
+            icon,
+            colors: icon == Icons.home_rounded ? const [Color(0xFF64748B), Color(0xFF1E293B)] : const [Color(0xFF4285F4), Color(0xFF34A853)],
+            size: 38,
+          ),
           title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
           childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
           expandedCrossAxisAlignment: CrossAxisAlignment.start,
@@ -374,30 +364,6 @@ class _Guide extends StatelessWidget {
   }
 }
 
-class _Hint extends StatelessWidget {
-  final IconData icon;
-  final String text;
-  const _Hint({required this.icon, required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 18, color: cs.onSurfaceVariant),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(text, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _Notice extends StatelessWidget {
   final IconData icon;
   final String title, message;
@@ -411,12 +377,7 @@ class _Notice extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 12),
       child: Column(
         children: [
-          Container(
-            width: 84,
-            height: 84,
-            decoration: BoxDecoration(color: cs.primaryContainer.withValues(alpha: .6), shape: BoxShape.circle),
-            child: Icon(icon, size: 40, color: cs.primary),
-          ),
+          Icon(icon, size: 56, color: cs.primary),
           const SizedBox(height: 16),
           Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
           const SizedBox(height: 6),

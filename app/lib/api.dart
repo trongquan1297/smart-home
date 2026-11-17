@@ -165,6 +165,21 @@ class Api {
   Future<void> updateRule(String id, Map<String, dynamic> body) => _send('PATCH', '/v1/rules/$id', body);
   Future<void> deleteRule(String id) => _send('DELETE', '/v1/rules/$id');
 
+  Future<List<Speaker>> speakers(String homeId) async =>
+      ((await _send('GET', '/v1/homes/$homeId/speakers')) as List).map((e) => Speaker.fromJson(Map<String, dynamic>.from(e))).toList();
+  Future<List<FoundSpeaker>> scanSpeakers(String homeId) async =>
+      (((await _send('POST', '/v1/homes/$homeId/speakers/scan'))['devices']) as List).map((e) => FoundSpeaker.fromJson(Map<String, dynamic>.from(e))).toList();
+  Future<void> addSpeaker(String homeId, FoundSpeaker f, String name) => _send('POST', '/v1/homes/$homeId/speakers', {
+    'cast_id': f.castId,
+    'name': name,
+    'host': f.host,
+    'port': f.port,
+    if (f.gatewayId != null) 'gateway_id': f.gatewayId,
+  });
+  Future<void> renameSpeaker(String id, String name) => _send('PATCH', '/v1/speakers/$id', {'name': name});
+  Future<void> deleteSpeaker(String id) => _send('DELETE', '/v1/speakers/$id');
+  Future<void> testSpeaker(String id) => _send('POST', '/v1/speakers/$id/test');
+
   // tenant / home
   Future<void> createTenant(String name) => _send('POST', '/v1/tenants', {'name': name});
   Future<void> createHome(String tenantId, String name) => _send('POST', '/v1/tenants/$tenantId/homes', {'name': name});

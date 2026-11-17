@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::{
     access::{self, Role},
     auth::{self, AuthUser},
-    alerts, automation, client_ws, gateway_ws, presence, rules,
+    alerts, automation, client_ws, gateway_ws, presence, rules, speak,
     error::{ApiError, ApiResult},
     AppState,
 };
@@ -53,6 +53,10 @@ pub fn router(st: AppState) -> Router {
         .route("/v1/homes/:hid/scenes", get(automation::list_scenes).post(automation::create_scene))
         .route("/v1/scenes/:sid", patch(automation::update_scene).delete(automation::delete_scene))
         .route("/v1/scenes/:sid/run", post(automation::run_scene))
+        .route("/v1/homes/:hid/speakers", get(speak::list).post(speak::add))
+        .route("/v1/homes/:hid/speakers/scan", post(speak::scan))
+        .route("/v1/speakers/:id", patch(speak::rename).delete(speak::remove))
+        .route("/v1/speakers/:id/test", post(speak::test))
         .route("/v1/homes/:hid/rules", get(rules::list).post(rules::create))
         .route("/v1/rules/:id", patch(rules::update).delete(rules::delete))
         .route("/v1/homes/:hid/location", put(presence::set_location).delete(presence::clear_location))

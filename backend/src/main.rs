@@ -11,6 +11,7 @@ mod push;
 mod rules;
 mod ratelimit;
 mod routes;
+mod speak;
 
 use std::sync::Arc;
 

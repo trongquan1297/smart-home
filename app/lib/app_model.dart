@@ -39,6 +39,9 @@ class AppModel extends ChangeNotifier {
   /// Luật tự động của các thiết bị trong căn hộ đang mở (chỉ nạp cho quản trị, người duy nhất sửa được).
   List<DeviceRule> rules = [];
 
+  /// Loa Cast của căn hộ đang mở (thành viên trở lên xem được).
+  List<Speaker> speakers = [];
+
   /// Số cảnh báo chưa xem của căn hộ đang mở (chấm đỏ trên chuông). Mốc "đã xem" lưu theo (người dùng, căn hộ).
   int unreadAlerts = 0;
   bool notificationsOpen = false;
@@ -224,6 +227,7 @@ class AppModel extends ChangeNotifier {
     home = null;
     scenes = [];
     rules = [];
+    speakers = [];
     unreadAlerts = 0;
     notifyListeners();
   }
@@ -238,6 +242,7 @@ class AppModel extends ChangeNotifier {
       error = null;
       await _loadScenes();
       await _loadRules();
+      await _loadSpeakers();
       await _loadUnread();
       unawaited(refreshGeofence());
     } catch (e) {
@@ -329,6 +334,24 @@ class AppModel extends ChangeNotifier {
     } catch (_) {
       // giữ danh sách cũ nếu lỗi mạng thoáng qua
     }
+  }
+
+  Future<void> _loadSpeakers() async {
+    final h = home;
+    if (h == null || !h.canRunScenes) {
+      speakers = [];
+      return;
+    }
+    try {
+      speakers = await api.speakers(h.id);
+    } catch (_) {
+      // giữ danh sách cũ nếu lỗi mạng thoáng qua
+    }
+  }
+
+  Future<void> reloadSpeakers() async {
+    await _loadSpeakers();
+    notifyListeners();
   }
 
   /// Nạp lại luật sau khi tạo/sửa/xoá.
