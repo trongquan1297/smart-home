@@ -606,7 +606,7 @@ class Scene {
 /// Một thông báo trong lịch sử của căn hộ (cảm biến hiện diện / cửa được kích hoạt).
 class AppNotification {
   final int id;
-  final String kind; // presence | door_open
+  final String kind; // presence | door_open | scene_auto | scene_failed
   final String title;
   final String body;
   final DateTime createdAt;
@@ -618,4 +618,54 @@ class AppNotification {
     body: j['body'] ?? '',
     createdAt: DateTime.parse(j['created_at']).toLocal(),
   );
+}
+
+/// Luật tự động của một gang (biểu tượng tia sét): tự tắt sau khi bật, tự bật lại sau khi tắt, hoặc đồng kích hoạt theo gang khác.
+class DeviceRule {
+  final String id;
+  final String deviceId;
+  final String key; // gang áp dụng (state, state_1…)
+  final String kind; // auto_off | auto_on | link
+  final int? delaySeconds;
+  final String? sourceDeviceId;
+  final String? sourceKey;
+  final String? sourceState; // ON | OFF
+  final String? targetState; // ON | OFF
+  final bool enabled;
+  DeviceRule({
+    required this.id,
+    required this.deviceId,
+    required this.key,
+    required this.kind,
+    this.delaySeconds,
+    this.sourceDeviceId,
+    this.sourceKey,
+    this.sourceState,
+    this.targetState,
+    this.enabled = true,
+  });
+
+  factory DeviceRule.fromJson(Map<String, dynamic> j) => DeviceRule(
+    id: j['id'],
+    deviceId: j['device_id'],
+    key: j['key'],
+    kind: j['kind'],
+    delaySeconds: (j['delay_s'] as num?)?.toInt(),
+    sourceDeviceId: j['source_device_id'],
+    sourceKey: j['source_key'],
+    sourceState: j['source_state'],
+    targetState: j['target_state'],
+    enabled: j['enabled'] != false,
+  );
+
+  /// "30 giây", "5 phút", "1 giờ 30 phút".
+  static String delayLabel(int s) {
+    if (s < 60) return '$s giây';
+    if (s < 3600) {
+      final m = s ~/ 60, r = s % 60;
+      return r == 0 ? '$m phút' : '$m phút $r giây';
+    }
+    final h = s ~/ 3600, m = (s % 3600) ~/ 60;
+    return m == 0 ? '$h giờ' : '$h giờ $m phút';
+  }
 }

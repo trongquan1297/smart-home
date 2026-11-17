@@ -117,7 +117,17 @@ Trong form ngữ cảnh có tuỳ chọn **Tự chuyển khi rời nhà** (quả
 
 - Quy tắc "người cuối cùng": chỉ tính thành viên đã báo trạng thái trong 7 ngày gần nhất và còn quyền; báo "ngoài" khi chưa ai từng báo "trong" thì không chạy gì; báo lặp lại không chạy lại; đổi hoặc xoá vị trí thì xoá trạng thái cũ.
 - Cần quyền vị trí **"Luôn luôn"**: app xin khi lưu ngữ cảnh, và hiện dải nhắc trên màn hình căn hộ nếu thành viên khác chưa cấp. Đăng xuất sẽ gỡ geofence của máy.
+- Thông báo: mỗi lần ngữ cảnh **tự** chạy (theo giờ hoặc khi rời nhà) máy chủ lưu thông báo `scene_auto` ("Đã tự chuyển sang …" + lý do), đẩy WebSocket `alert` và FCM tới chủ nhà/quản trị/thành viên như cảnh báo cảm biến. Rời nhà mà gateway offline thì báo `scene_failed`; lịch theo giờ không báo thất bại vì tự thử lại 5 phút. Chạy bằng tay không tạo thông báo.
 - Giới hạn: gateway offline lúc rời nhà thì ngữ cảnh không chạy (ghi `failed`, không chạy bù); điện thoại hết pin/tắt định vị/không cấp quyền thì không báo được; callback nền dùng refresh token đã lưu, hiếm khi trùng với app đang mở có thể làm phiên bị thu hồi (xem §5 ARCHITECTURE).
+
+## Luật tự động theo thiết bị (biểu tượng ⚡)
+
+Trên thẻ công tắc/đèn/ổ cắm (quản trị) bấm ⚡, chọn gang rồi đặt:
+- **Tự tắt sau khi bật**: gang BẬT được N giây/phút/giờ (1 giây – 24 giờ) thì tự TẮT.
+- **Tự bật lại sau khi tắt**: gang TẮT được N thì tự BẬT lại.
+- **Đồng kích hoạt**: khi một gang khác (của thiết bị khác hoặc cùng thiết bị) chuyển sang bật/tắt thì gang này bật/tắt theo (chọn cả điều kiện và kết quả).
+
+Luật chạy trong backend (`backend/src/rules.rs`): mỗi bản tin trạng thái từ gateway được so với trạng thái cũ; chuyển ON↔OFF sẽ hẹn giờ (bảng `pending_actions`, sống sót qua khởi động lại backend, kiểm tra mỗi giây) hoặc kích hoạt luật `link`. Áp dụng cho mọi cách đổi trạng thái (app, ngữ cảnh, công tắc vật lý). Hẹn giờ bị huỷ nếu gang đổi trạng thái trước hạn; mỗi gang tối đa một luật tự tắt và một luật tự bật lại; luật `link` **không nối chuỗi** (gang bị luật điều khiển không kích hoạt luật khác) để tránh vòng lặp. Cần backend và gateway online; hẹn giờ đến hạn mà gateway offline quá 60 giây thì bỏ. Chỉ áp dụng cho trạng thái ON/OFF — rèm (OPEN/CLOSE) chưa hỗ trợ.
 
 ## Chạy với Zigbee2MQTT thật trên Pi 3
 
@@ -167,6 +177,7 @@ Flutter app ── backend (cloud) ◀── gateway agent ┘   (lấy mã QR, 
 | `GET /v1/homes/:id/devices`, `PATCH /v1/devices/:id` | thiết bị: đổi tên, gán phòng, đặt tên + loại tải cho từng gang (`channels`: `light` `fan` `outlet` `air_conditioner` `water_heater` `other`) |
 | `POST /v1/devices/:id/command` `{"payload":{"state_1":"TOGGLE"}}` | điều khiển → `202`; `503` nếu gateway offline |
 | `GET /v1/homes/:id/ws?token=` | realtime: `device_state`, `device_online`, `gateway`, `devices_changed`, `scene_active`, `alert` (`alert` chỉ gửi cho thành viên trở lên) |
+| `GET/POST /v1/homes/:id/rules`, `PATCH/DELETE /v1/rules/:id` | luật thiết bị `{device_id,key,kind: auto_off\|auto_on\|link, delay_s, source_device_id, source_key, source_state, target_state}`: xem = member, sửa = admin |
 | `PUT/DELETE /v1/homes/:id/location`, `PUT /v1/homes/:id/presence` | vị trí căn hộ `{lat,lng,radius_m}` (admin); điện thoại báo `{inside: bool}` (member) cho "tự chuyển khi rời nhà" |
 | `GET /v1/homes/:id/notifications`, `DELETE /v1/homes/:id/active-scene`, `POST/DELETE /v1/push/tokens` | lịch sử cảnh báo (member); tắt ngữ cảnh đang bật (member); đăng ký/gỡ token FCM của thiết bị `{token, platform: ios\|android}` |
 | `GET/POST /v1/homes/:id/members…`, `/invites`, `/gateways` | thành viên, mời, gateway |
@@ -176,6 +187,8 @@ Flutter app ── backend (cloud) ◀── gateway agent ┘   (lấy mã QR, 
 Lệnh chỉ chấp nhận thuộc tính `state*` (ON/OFF/TOGGLE), `brightness*`, `color_temp*`; mọi payload khác bị từ chối để client không thể gọi các topic quản trị của Zigbee2MQTT.
 
 ## Đã kiểm chứng / chưa kiểm chứng
+
+Luật thiết bị (⚡): đã kiểm thử đầu-cuối trên Docker với simulator Zigbee (tự tắt ~4 s, tự bật lại ~3 s, huỷ khi đổi trạng thái trước hạn, luật bị tắt không chạy, đồng kích hoạt bật/tắt, không nối chuỗi, phân quyền, validate) và giao diện iOS Simulator (tạo luật tự tắt). **Chưa kiểm chứng**: với thiết bị VSmart thật (độ trễ phản hồi trạng thái), luật link qua nhiều gateway, khởi động lại backend giữa lúc đang hẹn giờ.
 
 "Tự chuyển khi rời nhà": API đã kiểm thử đầu-cuối trên Docker (2 thành viên, người cuối rời mới chạy, báo lặp, quyền, xoá vị trí) và form + xin quyền + đặt vị trí trên iOS Simulator; app build được trên iOS Simulator và Android (APK debug). **Chưa kiểm chứng**: geofence thật (vào/ra vùng), callback nền khi app tắt, quyền "Luôn luôn" trên Android, trên máy thật.
 

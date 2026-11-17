@@ -87,14 +87,19 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               separatorBuilder: (_, _) => const SizedBox(height: 10),
               itemBuilder: (_, i) {
                 final n = list[i];
-                final door = n.kind == 'door_open';
+                final icon = switch (n.kind) {
+                  'door_open' => Icons.door_front_door_outlined,
+                  'scene_auto' => Icons.auto_awesome_rounded,
+                  'scene_failed' => Icons.error_outline_rounded,
+                  _ => Icons.directions_walk_rounded,
+                };
                 return Card(
                   child: ListTile(
                     leading: Container(
                       width: 44,
                       height: 44,
                       decoration: BoxDecoration(color: cs.tertiaryContainer, borderRadius: BorderRadius.circular(14)),
-                      child: Icon(door ? Icons.door_front_door_outlined : Icons.directions_walk_rounded, color: cs.onTertiaryContainer),
+                      child: Icon(icon, color: cs.onTertiaryContainer),
                     ),
                     title: Text(n.title, style: const TextStyle(fontWeight: FontWeight.w700)),
                     subtitle: Text('${n.body}\n${fmtDateTime(n.createdAt)}'),

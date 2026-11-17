@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::{
     access::{self, Role},
+    alerts,
     auth::AuthUser,
     error::{ApiError, ApiResult},
     routes::validate_command,
@@ -72,13 +73,13 @@ async fn validate_actions(st: &AppState, hid: Uuid, v: &Value) -> ApiResult<Valu
 }
 
 #[derive(Default)]
-pub struct RunOutcome {
+pub(crate) struct RunOutcome {
     pub total: usize,
     pub sent: usize,
 }
 
 /// Gửi các hành động xuống gateway. Thiết bị đã xoá hoặc gateway offline tính là không gửi được.
-async fn execute(st: &AppState, hid: Uuid, actions: &Value, user: Option<Uuid>) -> ApiResult<RunOutcome> {
+pub(crate) async fn execute(st: &AppState, hid: Uuid, actions: &Value, user: Option<Uuid>) -> ApiResult<RunOutcome> {
     let arr = actions.as_array().cloned().unwrap_or_default();
     let ids: Vec<Uuid> = arr.iter().filter_map(|a| a.get("device_id").and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok())).collect();
     let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as("SELECT id, gateway_id, friendly_name FROM devices WHERE home_id = $1 AND id = ANY($2)")
@@ -352,6 +353,7 @@ pub async fn run_auto_leave(st: &AppState, hid: Uuid) {
         activate_scene(st, hid, sid).await;
     }
     let _ = sqlx::query("UPDATE scenes SET last_status = $2 WHERE id = $1").bind(sid).bind(status).execute(&st.db).await;
+    alerts::scene_auto_ran(st, hid, sid, alerts::AutoRun::Leave, outcome.sent > 0).await;
 }
 
 /// Tắt chế độ đang bật (ngừng mọi cảnh báo cảm biến theo ngữ cảnh). Thành viên trở lên.
@@ -445,6 +447,7 @@ async fn run_due(st: &AppState) -> ApiResult<()> {
         tracing::info!(scene = %r.id, sent = outcome.sent, total = outcome.total, status, "scene auto-ran");
         if outcome.sent > 0 {
             activate_scene(st, r.home_id, r.id).await;
+            alerts::scene_auto_ran(st, r.home_id, r.id, alerts::AutoRun::Schedule(r.time_of_day.format("%H:%M").to_string()), true).await;
         }
         sqlx::query("UPDATE scenes SET last_status = $2 WHERE id = $1").bind(r.id).bind(status).execute(&st.db).await?;
     }

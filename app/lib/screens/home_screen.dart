@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../app_model.dart';
 import '../models.dart';
 import 'device_edit_dialog.dart';
+import 'device_rules_sheet.dart';
 import 'gateways_screen.dart';
 import 'matter_screen.dart';
 import 'notifications_screen.dart';
@@ -761,6 +762,13 @@ class _DeviceCard extends StatelessWidget {
                         ],
                       ),
                     ),
+                    if (isAdmin && d.switchKeys.isNotEmpty)
+                      IconButton(
+                        icon: Badge(isLabelVisible: m.rules.any((r) => r.deviceId == d.id), smallSize: 8, child: const Icon(Icons.bolt_rounded, size: 22)),
+                        tooltip: 'Tự động hoá',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => showDeviceRulesSheet(context, m, d),
+                      ),
                     if (isAdmin)
                       IconButton(
                         icon: const Icon(Icons.edit_outlined, size: 20),

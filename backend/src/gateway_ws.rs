@@ -213,6 +213,7 @@ async fn handle(st: &AppState, gw: &Gw, msg: GwMsg) -> ApiResult<()> {
             if let Some((id, state, old_state)) = row {
                 st.hub.publish(gw.home_id, json!({"type": "device_state", "device_id": id, "state": state}).to_string());
                 crate::alerts::on_state(st, gw.home_id, id, &old_state, &state).await;
+                crate::rules::on_state(st, gw.home_id, id, &old_state, &state).await;
             }
         }
         GwMsg::Availability { friendly_name, online } => {

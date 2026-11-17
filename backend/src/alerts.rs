@@ -111,6 +111,49 @@ async fn raise(st: &AppState, home: Uuid, device: Uuid, ev: Event) -> ApiResult<
     Ok(())
 }
 
+/// Vì sao một ngữ cảnh tự chạy (không do người dùng bấm).
+pub enum AutoRun {
+    /// Đến giờ đã hẹn ("HH:MM" giờ địa phương của căn hộ).
+    Schedule(String),
+    /// Người cuối cùng đã rời nhà.
+    Leave,
+}
+
+/// Báo cho thành viên rằng một ngữ cảnh vừa tự chạy (theo giờ hoặc khi rời nhà): lưu lịch sử, đẩy WebSocket và FCM.
+/// `ok = false` (gateway offline, không gửi được lệnh nào) chỉ báo cho trường hợp rời nhà vì đó là sự kiện một lần, không thử lại;
+/// lịch theo giờ tự thử lại trong 5 phút nên không báo thất bại. Lỗi ở đây chỉ ghi log, không ảnh hưởng việc chạy ngữ cảnh.
+pub async fn scene_auto_ran(st: &AppState, home: Uuid, scene: Uuid, why: AutoRun, ok: bool) {
+    if !ok && !matches!(why, AutoRun::Leave) {
+        return;
+    }
+    let name: Option<String> = sqlx::query_scalar("SELECT name FROM scenes WHERE id = $1").bind(scene).fetch_optional(&st.db).await.unwrap_or(None);
+    let Some(name) = name else { return };
+    let (kind, title, body) = match (&why, ok) {
+        (AutoRun::Schedule(t), _) => ("scene_auto", format!("Đã tự chuyển sang \"{name}\""), format!("Theo lịch {t}")),
+        (AutoRun::Leave, true) => ("scene_auto", format!("Đã tự chuyển sang \"{name}\""), "Không còn ai ở nhà".to_string()),
+        (AutoRun::Leave, false) => ("scene_failed", format!("Không chuyển được sang \"{name}\""), "Mọi người đã rời nhà nhưng bộ điều khiển trung tâm đang offline".to_string()),
+    };
+    let ins: Result<(i64, DateTime<Utc>), _> = sqlx::query_as(
+        "INSERT INTO notifications (home_id, scene_id, kind, title, body) VALUES ($1,$2,$3,$4,$5) RETURNING id, created_at",
+    )
+    .bind(home)
+    .bind(scene)
+    .bind(kind)
+    .bind(&title)
+    .bind(&body)
+    .fetch_one(&st.db)
+    .await;
+    let (id, at) = match ins {
+        Ok(r) => r,
+        Err(e) => return tracing::warn!(%home, "scene auto notification: {e}"),
+    };
+    st.hub.publish(home, json!({"type": "alert", "id": id, "kind": kind, "title": title, "body": body, "scene_id": scene, "created_at": at}).to_string());
+    let st2 = st.clone();
+    tokio::spawn(async move {
+        push::notify_home(&st2, home, &title, &body, json!({"kind": kind, "home_id": home, "scene_id": scene})).await;
+    });
+}
+
 /// Xoá thông báo cũ (gọi định kỳ).
 pub async fn purge_old(st: &AppState) {
     if let Err(e) = sqlx::query("DELETE FROM notifications WHERE created_at < now() - make_interval(days => $1)").bind(KEEP_DAYS).execute(&st.db).await {

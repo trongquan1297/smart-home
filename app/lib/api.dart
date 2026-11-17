@@ -159,6 +159,12 @@ class Api {
   Future<void> clearHomeLocation(String homeId) => _send('DELETE', '/v1/homes/$homeId/location');
   Future<void> reportPresence(String homeId, bool inside) => _send('PUT', '/v1/homes/$homeId/presence', {'inside': inside});
 
+  Future<List<DeviceRule>> rules(String homeId) async =>
+      ((await _send('GET', '/v1/homes/$homeId/rules')) as List).map((e) => DeviceRule.fromJson(Map<String, dynamic>.from(e))).toList();
+  Future<void> createRule(String homeId, Map<String, dynamic> body) => _send('POST', '/v1/homes/$homeId/rules', body);
+  Future<void> updateRule(String id, Map<String, dynamic> body) => _send('PATCH', '/v1/rules/$id', body);
+  Future<void> deleteRule(String id) => _send('DELETE', '/v1/rules/$id');
+
   // tenant / home
   Future<void> createTenant(String name) => _send('POST', '/v1/tenants', {'name': name});
   Future<void> createHome(String tenantId, String name) => _send('POST', '/v1/tenants/$tenantId/homes', {'name': name});

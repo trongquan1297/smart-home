@@ -79,7 +79,16 @@ Migration 0008: `homes.geo_lat/geo_lng/geo_radius_m`, `scenes.auto_leave` (chỉ
 
 - Riêng tư: máy chủ chỉ biết vị trí căn hộ do quản trị đặt và cờ trong/ngoài của từng người; toạ độ của thành viên ở lại trên điện thoại (geofence do hệ điều hành đánh giá).
 - App (`geofence_service.dart`): `native_geofence` với callback top-level `homeGeofenceTriggered` chạy trong isolate nền, tự đọc `token`/`refresh_token` từ `flutter_secure_storage` rồi gọi `presence`. Rủi ro đã biết: nếu app đang mở và callback nền cùng làm mới token một lúc thì refresh token xoay vòng bị coi là dùng lại và thu hồi cả phiên (hiếm; chưa có khoá chéo giữa hai isolate). `AppModel.refreshGeofence` đăng ký/gỡ theo cấu hình (chỉ khi căn hộ có vị trí và có ngữ cảnh `auto_leave`) và báo ngay trạng thái hiện tại để máy chủ có mốc "trong".
-- Chưa làm: kích hoạt khi **về** nhà, nhiều vùng cho một căn hộ, thử lại khi gateway offline lúc rời nhà, thông báo "đã tự chạy ngữ cảnh X".
+- Thông báo khi tự chạy: `alerts::scene_auto_ran` (gọi từ `run_due` và `run_auto_leave`) ghi `notifications` kind `scene_auto`/`scene_failed`, publish WS `alert`, gửi FCM — cùng đường với cảnh báo cảm biến.
+- Chưa làm: kích hoạt khi **về** nhà, nhiều vùng cho một căn hộ, thử lại khi gateway offline lúc rời nhà.
+
+## 4f. Luật tự động theo thiết bị
+
+Migration 0009: `device_rules(kind auto_off|auto_on|link, key, delay_s, source_*, target_state, enabled)` (chỉ mục duy nhất từng phần: mỗi (thiết bị, gang) một luật mỗi loại hẹn giờ) và `pending_actions(rule_id PK, due_at, state)`. `rules::on_state` được gọi sau `alerts::on_state` trong handler `State` của gateway với trạng thái cũ/mới: `transitions` chỉ tính ON↔OFF của khoá `state*` khi đã có trạng thái cũ (bản tin đầu tiên, rèm OPEN/CLOSE bị bỏ qua). Chuyển sang ON: huỷ hẹn `auto_on`, hẹn `auto_off` (upsert theo `rule_id` nên bật lại thì tính lại giờ); chuyển sang OFF: ngược lại. `rules::runner` quét `pending_actions` mỗi giây; chỉ gửi nếu gang chưa ở trạng thái đích; gateway offline quá 60 giây thì bỏ.
+
+- Chống vòng lặp: lệnh do luật phát được ghi vào `AppState.rule_cmds` (thiết bị, gang) → (trạng thái, thời điểm); bản tin phản hồi trong 20 giây khớp trạng thái đó **không** kích hoạt luật `link` (không nối chuỗi), nhưng vẫn được tính cho hẹn giờ (vd link bật gang B rồi B có luật tự tắt vẫn chạy). `rule_cmds` nằm trong RAM của một tiến trình backend.
+- Đổi cấu hình luật (PATCH) xoá hẹn giờ đang chờ của luật đó; xoá luật/thiết bị xoá hẹn giờ theo (CASCADE).
+- Chưa làm: luật cho rèm (OPEN/CLOSE), điều kiện theo giờ trong ngày, trễ cho luật `link`, nhật ký "luật đã chạy" trong lịch sử thông báo.
 
 ## 5. Bảo mật — đã làm / còn thiếu
 

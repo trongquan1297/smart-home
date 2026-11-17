@@ -8,6 +8,7 @@ mod gateway_ws;
 mod hub;
 mod presence;
 mod push;
+mod rules;
 mod ratelimit;
 mod routes;
 
@@ -30,6 +31,8 @@ pub struct AppState {
     pub push: Arc<Option<push::Fcm>>,
     /// Lần báo gần nhất theo (thiết bị, loại sự kiện) để giới hạn tần suất cảnh báo.
     pub alert_seen: Arc<dashmap::DashMap<(uuid::Uuid, alerts::Event), std::time::Instant>>,
+    /// Lệnh gần nhất do luật thiết bị phát theo (thiết bị, gang) → (trạng thái, lúc gửi): để phân biệt bản tin phản hồi, không nối chuỗi luật `link`.
+    pub rule_cmds: Arc<dashmap::DashMap<(uuid::Uuid, String), (String, std::time::Instant)>>,
 }
 
 #[tokio::main]
@@ -64,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
         dummy_hash: Arc::new(auth::dummy_hash().await),
         push: Arc::new(push::Fcm::from_env()),
         alert_seen: Arc::new(dashmap::DashMap::new()),
+        rule_cmds: Arc::new(dashmap::DashMap::new()),
     };
     if state.push.is_none() {
         tracing::info!("push: FCM chưa cấu hình (đặt FCM_SERVICE_ACCOUNT_FILE để bật); cảnh báo vẫn lưu và đẩy realtime tới app đang mở");
@@ -88,6 +92,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tokio::spawn(automation::scheduler(state.clone()));
+    tokio::spawn(rules::runner(state.clone()));
 
     let app = routes::router(state).layer(tower_http::trace::TraceLayer::new_for_http());
 

@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::{
     access::{self, Role},
     auth::{self, AuthUser},
-    alerts, automation, client_ws, gateway_ws, presence,
+    alerts, automation, client_ws, gateway_ws, presence, rules,
     error::{ApiError, ApiResult},
     AppState,
 };
@@ -53,6 +53,8 @@ pub fn router(st: AppState) -> Router {
         .route("/v1/homes/:hid/scenes", get(automation::list_scenes).post(automation::create_scene))
         .route("/v1/scenes/:sid", patch(automation::update_scene).delete(automation::delete_scene))
         .route("/v1/scenes/:sid/run", post(automation::run_scene))
+        .route("/v1/homes/:hid/rules", get(rules::list).post(rules::create))
+        .route("/v1/rules/:id", patch(rules::update).delete(rules::delete))
         .route("/v1/homes/:hid/location", put(presence::set_location).delete(presence::clear_location))
         .route("/v1/homes/:hid/presence", put(presence::report))
         .route("/v1/homes/:hid/active-scene", delete(automation::deactivate_scene))

@@ -36,6 +36,9 @@ class AppModel extends ChangeNotifier {
   /// Ngữ cảnh của căn hộ (chỉ tải cho vai trò chạy được ngữ cảnh) — để hiện chế độ đang bật.
   List<Scene> scenes = [];
 
+  /// Luật tự động của các thiết bị trong căn hộ đang mở (chỉ nạp cho quản trị, người duy nhất sửa được).
+  List<DeviceRule> rules = [];
+
   /// Số cảnh báo chưa xem của căn hộ đang mở (chấm đỏ trên chuông). Mốc "đã xem" lưu theo (người dùng, căn hộ).
   int unreadAlerts = 0;
   bool notificationsOpen = false;
@@ -220,6 +223,7 @@ class AppModel extends ChangeNotifier {
     _closeWs();
     home = null;
     scenes = [];
+    rules = [];
     unreadAlerts = 0;
     notifyListeners();
   }
@@ -233,6 +237,7 @@ class AppModel extends ChangeNotifier {
       devices = r[1] as List<Device>;
       error = null;
       await _loadScenes();
+      await _loadRules();
       await _loadUnread();
       unawaited(refreshGeofence());
     } catch (e) {
@@ -311,6 +316,25 @@ class AppModel extends ChangeNotifier {
   Future<void> enableLocationTracking() async {
     await GeofenceService.requestAlways();
     await refreshGeofence(force: true);
+  }
+
+  Future<void> _loadRules() async {
+    final h = home;
+    if (h == null || !h.isAdmin) {
+      rules = [];
+      return;
+    }
+    try {
+      rules = await api.rules(h.id);
+    } catch (_) {
+      // giữ danh sách cũ nếu lỗi mạng thoáng qua
+    }
+  }
+
+  /// Nạp lại luật sau khi tạo/sửa/xoá.
+  Future<void> reloadRules() async {
+    await _loadRules();
+    notifyListeners();
   }
 
   /// Nạp lại danh sách ngữ cảnh sau khi tạo/sửa/xoá (cập nhật chip "đang bật" và geofence).
