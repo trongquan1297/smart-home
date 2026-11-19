@@ -278,9 +278,9 @@ def apply_set(name, cmd):
         save_state()
 
 
-def set_permit(enable):
+def set_permit(enable, seconds=None):
     with LOCK:
-        PERMIT["until"] = time.time() + PERMIT_SECONDS if enable else 0.0
+        PERMIT["until"] = time.time() + (seconds or PERMIT_SECONDS) if enable else 0.0
         publish_info()
     print("permit_join", enable, flush=True)
 
@@ -388,7 +388,11 @@ def on_message(c, _u, msg):
     except ValueError:
         return
     if msg.topic == f"{BASE}/bridge/request/permit_join":
-        set_permit(bool(body.get("time", body.get("value", 0))))
+        t = body.get("time")  # Z2M 2.x: {"time": giây}, 0 = đóng; 1.x: {"value": bool}
+        if isinstance(t, (int, float)):
+            set_permit(t > 0, min(int(t), 254))
+        else:
+            set_permit(bool(body.get("value", 0)))
     elif len(parts) == 3 and parts[2] == "set" and isinstance(body, dict):
         try:
             apply_set(parts[1], body)

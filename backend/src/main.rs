@@ -1,6 +1,7 @@
 mod access;
 mod alerts;
 mod automation;
+mod camera;
 mod auth;
 mod client_ws;
 mod error;

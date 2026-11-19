@@ -21,7 +21,8 @@ class _DeviceEditSheet extends StatefulWidget {
 }
 
 class _DeviceEditSheetState extends State<_DeviceEditSheet> {
-  late final TextEditingController _name = TextEditingController(text: widget.device.name);
+  // Thiết bị vừa ghép có tên mặc định là địa chỉ IEEE (0x00124b…): gợi ý tên theo loại thay vì bắt người dùng xoá chuỗi đó.
+  late final TextEditingController _name = TextEditingController(text: widget.device.name == widget.device.ieee ? widget.device.typeLabel : widget.device.name);
   late String? _roomId = widget.device.roomId;
   late final Map<String, TextEditingController> _chName = {
     for (final k in widget.device.switchKeys) k: TextEditingController(text: widget.device.channels[k]?.name ?? ''),

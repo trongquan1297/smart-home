@@ -11,6 +11,9 @@ import 'notifier.dart';
 import 'push_service.dart';
 import 'models.dart';
 
+/// Tiến trình ghép một thiết bị Zigbee: vào mạng → interview xong (đã thêm) / lỗi / rời mạng.
+enum PairStatus { joined, added, failed, left }
+
 class AppModel extends ChangeNotifier {
   final api = Api();
   final _storage = const FlutterSecureStorage();
@@ -42,6 +45,9 @@ class AppModel extends ChangeNotifier {
   /// Loa Cast của căn hộ đang mở (thành viên trở lên xem được).
   List<Speaker> speakers = [];
 
+  /// Camera của căn hộ đang mở (thành viên trở lên; khách thuê/khách xem không thấy camera).
+  List<Camera> cameras = [];
+
   /// Số cảnh báo chưa xem của căn hộ đang mở (chấm đỏ trên chuông). Mốc "đã xem" lưu theo (người dùng, căn hộ).
   int unreadAlerts = 0;
   bool notificationsOpen = false;
@@ -58,6 +64,21 @@ class AppModel extends ChangeNotifier {
 
   bool gatewayOnline = false;
   String? error;
+
+  /// Ghép thiết bị Zigbee: hạn cửa sổ cho phép vào mạng (null = đang đóng) và tiến trình từng thiết bị theo IEEE.
+  DateTime? permitUntil;
+  final Map<String, PairStatus> pairing = {};
+
+  bool get permitOpen => permitUntil != null && permitUntil!.isAfter(DateTime.now());
+
+  Future<void> setPermitJoin(int seconds) async {
+    final h = home;
+    if (h == null) return;
+    if (seconds > 0) pairing.clear();
+    final s = await api.permitJoin(h.id, seconds);
+    permitUntil = s > 0 ? DateTime.now().add(Duration(seconds: s)) : null;
+    notifyListeners();
+  }
 
   WebSocketChannel? _ws;
   StreamSubscription? _wsSub;
@@ -225,9 +246,12 @@ class AppModel extends ChangeNotifier {
   void leaveHome() {
     _closeWs();
     home = null;
+    permitUntil = null;
+    pairing.clear();
     scenes = [];
     rules = [];
     speakers = [];
+    cameras = [];
     unreadAlerts = 0;
     notifyListeners();
   }
@@ -243,6 +267,7 @@ class AppModel extends ChangeNotifier {
       await _loadScenes();
       await _loadRules();
       await _loadSpeakers();
+      await _loadCameras();
       await _loadUnread();
       unawaited(refreshGeofence());
     } catch (e) {
@@ -282,6 +307,24 @@ class AppModel extends ChangeNotifier {
     try {
       await _storage.write(key: _seenKey, value: (upTo ?? DateTime.now()).toUtc().toIso8601String());
     } catch (_) {}
+  }
+
+  Future<void> _loadCameras() async {
+    final h = home;
+    if (h == null || !h.canRunScenes) {
+      cameras = [];
+      return;
+    }
+    try {
+      cameras = await api.cameras(h.id);
+    } catch (_) {
+      // máy chủ cũ chưa có API camera / lỗi mạng: giữ danh sách cũ
+    }
+  }
+
+  Future<void> reloadCameras() async {
+    await _loadCameras();
+    notifyListeners();
   }
 
   Future<void> _loadScenes() async {
@@ -452,6 +495,34 @@ class AppModel extends ChangeNotifier {
       case 'devices_changed':
         reload();
         return;
+      case 'cameras_changed':
+        reloadCameras();
+        return;
+      case 'camera_online':
+        for (final c in cameras) {
+          if (c.id == m['camera_id']) c.online = m['online'] == true;
+        }
+      case 'permit_join':
+        final s = (m['seconds'] as num?)?.toInt() ?? 0;
+        permitUntil = m['open'] == true && s > 0 ? DateTime.now().add(Duration(seconds: s)) : null;
+      case 'pair_event':
+        final ieee = m['ieee'] as String?;
+        final st = switch (m['event']) {
+          'device_joined' => PairStatus.joined,
+          'device_interview' => switch (m['status']) {
+            'successful' => PairStatus.added,
+            'failed' => PairStatus.failed,
+            _ => PairStatus.joined,
+          },
+          'device_leave' => PairStatus.left,
+          _ => null,
+        };
+        if (ieee == null || st == null) return;
+        // Thiết bị rời mạng chỉ đáng báo nếu nó vừa được ghép trong phiên này.
+        if (st == PairStatus.left && !pairing.containsKey(ieee)) return;
+        // Bản tin "đã vào mạng" tới trễ không được ghi đè kết quả cuối.
+        if (st == PairStatus.joined && (pairing[ieee] == PairStatus.added || pairing[ieee] == PairStatus.failed)) return;
+        pairing[ieee] = st;
       case 'scene_active':
         _loadScenes().then((_) => notifyListeners());
         return;

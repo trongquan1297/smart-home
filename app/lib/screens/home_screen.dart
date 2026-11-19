@@ -6,12 +6,14 @@ import 'package:provider/provider.dart';
 
 import '../app_model.dart';
 import '../models.dart';
+import 'cameras_screen.dart';
 import 'device_edit_dialog.dart';
 import '../widgets/ui.dart';
 import 'device_rules_sheet.dart';
 import 'gateways_screen.dart';
 import 'matter_screen.dart';
 import 'notifications_screen.dart';
+import 'pair_device_sheet.dart';
 import 'scenes_screen.dart';
 import 'members_screen.dart';
 import 'room_sheet.dart';
@@ -67,6 +69,18 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _open(BuildContext context, Widget page) => Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+
+  /// Một nút + cho mọi loại thiết bị: hỏi loại trước (Zigbee / camera), rồi mở luồng thêm tương ứng.
+  Future<void> _addDevice(BuildContext context) async {
+    final kind = await showCenterSheet<String>(context: context, builder: (c) => const _AddKindSheet());
+    if (kind == null || !context.mounted) return;
+    if (kind == 'camera') return showAddCameraSheet(context);
+    if (!context.read<AppModel>().gatewayOnline) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bộ điều khiển trung tâm đang offline: cần online mới ghép được thiết bị')));
+      return;
+    }
+    showPairDeviceSheet(context);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -147,6 +161,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
               actions: [
+                // Ghép thiết bị Zigbee mới ngay trong app (không cần mở giao diện web của Zigbee2MQTT).
+                if (home.isAdmin)
+                  IconButton(
+                    icon: Icon(Icons.add_rounded, size: 28, color: cs.primary),
+                    tooltip: 'Thêm thiết bị',
+                    onPressed: () => _addDevice(context),
+                  ),
                 // Khách thuê chỉ bật/tắt thiết bị: không có ngữ cảnh, danh sách thành viên.
                 if (home.canRunScenes)
                   IconButton(
@@ -172,11 +193,21 @@ class _HomeScreenState extends State<HomeScreen> {
                     icon: const Icon(Icons.more_vert_rounded),
                     onSelected: (v) => _open(context, switch (v) {
                       'members' => const MembersScreen(),
+                      'cameras' => const CamerasScreen(),
                       'matter' => const MatterScreen(),
                       'speakers' => const SpeakersScreen(),
                       _ => const GatewaysScreen(),
                     }),
                     itemBuilder: (_) => [
+                      if (home.canRunScenes)
+                        const PopupMenuItem(
+                          value: 'cameras',
+                          child: ListTile(
+                            leading: IconBadge(Icons.videocam_rounded, colors: Vivid.info, size: 32),
+                            title: Text('Camera'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
                       const PopupMenuItem(
                         value: 'members',
                         child: ListTile(
@@ -233,6 +264,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     showScene: home.canRunScenes,
                     onPickScene: () => _pickScene(context),
                   ),
+                  if (m.cameras.isNotEmpty) _CameraStrip(cameras: m.cameras, onAll: () => _open(context, const CamerasScreen())),
                   if (!m.gatewayOnline && m.devices.isEmpty)
                     _EmptyBlock(
                       icon: Icons.router_outlined,
@@ -247,10 +279,13 @@ class _HomeScreenState extends State<HomeScreen> {
                           : null,
                     ),
                   if (noDevicesAnywhere && m.gatewayOnline)
-                    const _EmptyBlock(
+                    _EmptyBlock(
                       icon: Icons.devices_other_rounded,
                       title: 'Chưa có thiết bị',
-                      message: 'Ghép thiết bị trong Zigbee2MQTT, chúng sẽ tự xuất hiện ở đây.',
+                      message: 'Bấm "Thêm thiết bị" rồi đưa thiết bị Zigbee về chế độ ghép nối.',
+                      action: home.isAdmin
+                          ? FilledButton.icon(icon: const Icon(Icons.add_rounded), label: const Text('Thêm thiết bị'), onPressed: () => _addDevice(context))
+                          : null,
                     ),
                 ]),
               ),
@@ -1123,4 +1158,116 @@ class _EmptyBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => EmptyState(icon: icon, colors: Vivid.gateway, title: title, info: message, action: action);
+}
+
+/// Dải camera ngang trên màn hình căn hộ: chạm để xem trực tiếp.
+class _CameraStrip extends StatelessWidget {
+  final List<Camera> cameras;
+  final VoidCallback onAll;
+  const _CameraStrip({required this.cameras, required this.onAll});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SectionHeader(
+            icon: Icons.videocam_rounded,
+            colors: Vivid.info,
+            title: 'Camera',
+            trailing: TextButton(onPressed: onAll, child: const Text('Tất cả')),
+          ),
+          SizedBox(
+            height: 128,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: cameras.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 10),
+              itemBuilder: (_, i) {
+                final c = cameras[i];
+                return SizedBox(
+                  width: 192,
+                  child: Card(
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: () => openCamera(context, c),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          CameraThumb(camera: c),
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            child: Container(
+                              padding: const EdgeInsets.fromLTRB(10, 14, 10, 8),
+                              decoration: const BoxDecoration(
+                                gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.transparent, Colors.black87]),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.circle, size: 8, color: c.online ? const Color(0xFF22C55E) : const Color(0xFFEF4444)),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      c.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Chọn loại thiết bị cần thêm. Sau này thêm loại mới (addon khác) chỉ cần thêm một dòng ở đây.
+class _AddKindSheet extends StatelessWidget {
+  const _AddKindSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+    Widget option(String value, IconData icon, List<Color> colors, String title, String sub) => Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        leading: IconBadge(icon, colors: colors, size: 40),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text(sub),
+        trailing: const Icon(Icons.chevron_right_rounded),
+        onTap: () => Navigator.pop(context, value),
+      ),
+    );
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Thêm thiết bị', style: tt.titleLarge),
+            const SizedBox(height: 16),
+            option('zigbee', Icons.toggle_on_rounded, Vivid.device, 'Thiết bị Zigbee', 'Công tắc, ổ cắm, rèm, cảm biến…'),
+            option('camera', Icons.videocam_rounded, Vivid.info, 'Camera', 'Camera Wi‑Fi ONVIF / RTSP'),
+          ],
+        ),
+      ),
+    );
+  }
 }

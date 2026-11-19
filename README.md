@@ -12,6 +12,7 @@ Giải pháp nhà thông minh đa khách hàng (multi-tenant): app Flutter → b
 | `backend/` | API Rust (axum + sqlx + Postgres): auth, tenant/căn hộ/phòng/thiết bị/thành viên, WebSocket realtime |
 | `gateway/` | Agent Rust chạy trên Pi: cầu nối MQTT cục bộ ⇄ WebSocket lên cloud |
 | `app/` | App Flutter (Android/iOS) |
+| `addons/camera/` | **Addon camera Wi‑Fi** (Rust): go2rtc + ONVIF — xem trực tiếp, PTZ, cảnh báo chuyển động |
 | `infra/` | Cấu hình Mosquitto, Zigbee2MQTT, **bộ giả lập Zigbee2MQTT có frontend web** |
 | `edge/` | `docker-compose` triển khai thật trên Pi |
 | `scripts/` | `bootstrap-dev.sh` tạo dữ liệu mẫu |
@@ -140,12 +141,37 @@ Menu ⋮ → **Loa thông báo** (quản trị): "Thêm loa" quét mạng LAN c�
 - **TTS dùng endpoint Google Translate không chính thức** (`translate.google.com/translate_tts`): không có tài liệu, có thể bị đổi hoặc chặn bất cứ lúc nào, và dùng ngoài trình duyệt có thể trái điều khoản dịch vụ của Google. Đổi nguồn bằng biến `TTS_URL_TEMPLATE` của gateway (đặt `{text}` là chỗ chèn câu đã mã hoá URL), ví dụ trỏ tới dịch vụ TTS riêng hoặc Google Cloud Text-to-Speech qua một proxy nhỏ.
 - Mỗi loa đọc từng câu một (xếp hàng); khi đọc, loa tạm dừng nhạc đang phát. Câu tối đa 140 ký tự.
 
+## Camera Wi‑Fi (addon go2rtc)
+
+Addon tách riêng, cài khi cần: [`addons/camera`](addons/camera) chạy cạnh [go2rtc](https://github.com/AlexxIT/go2rtc) trên một máy Linux trong nhà (Pi, NAS, mini PC), kết nối ra cloud bằng một token gateway riêng (khả năng `camera`). Không cần Zigbee.
+
+- **Thêm camera**: app → ⋮ → Camera → **+**. Bấm "Tìm camera trong mạng" (ONVIF WS-Discovery) hoặc nhập IP + cổng ONVIF; camera không có ONVIF thì nhập URL RTSP (không có PTZ/cảnh báo). Addon thử kết nối thật trước khi lưu: sai mật khẩu, sai địa chỉ, chưa bật ONVIF đều báo lỗi rõ.
+- **Mật khẩu camera chỉ nằm ở addon** (`/data/cameras.json`, quyền 600). Cloud chỉ lưu tên, phòng, địa chỉ hiển thị, hãng/model và khả năng (PTZ, sự kiện). Mất volume dữ liệu addon = phải thêm lại camera.
+- **Xem trực tiếp**: WebRTC đi thẳng điện thoại ↔ go2rtc; máy chủ chỉ chuyển SDP offer/answer. Không nối được trong ~8 giây (NAT đối xứng, một số mạng 4G) thì app chuyển sang **ảnh chụp ~1 giây/lần qua máy chủ**. Chuyển tiếp cổng 8555 (UDP+TCP) trên router về máy chạy addon giúp nối thẳng ổn định hơn.
+- **PTZ**: giữ nút mũi tên / zoom để quay, thả ra để dừng (ONVIF ContinuousMove + Stop, camera tự dừng sau 2 giây nếu lệnh dừng bị lạc). go2rtc không có PTZ nên addon tự gọi ONVIF.
+- **Cảnh báo chuyển động**: addon đăng ký sự kiện ONVIF (PullPoint), mỗi lần chuyển từ "không" sang "có chuyển động" thì cloud lưu thông báo, đẩy realtime + FCM; tối đa 1 lần/phút mỗi camera, bật/tắt theo từng camera. Chạm thông báo để mở camera.
+- Quyền: thành viên trở lên xem/PTZ; chỉ quản trị thêm/sửa/xoá. Khách thuê và khách xem không thấy camera.
+
+Triển khai trên máy trong nhà ([`edge/docker-compose.camera.yml`](edge/docker-compose.camera.yml), cần `network_mode: host`):
+
+```bash
+cd edge && CLOUD_WS_URL=wss://<backend>/gw/ws GATEWAY_TOKEN=<token tạo trong app> docker compose -f docker-compose.camera.yml up -d --build
+```
+
+Chạy thử với **camera ONVIF giả lập** (PTZ + sự kiện + video test, không cần camera thật): tạo gateway trong app (đặt tên "Camera"), rồi
+
+```bash
+COMPOSE_PROFILES=sim,camera CAMERA_GATEWAY_TOKEN=<token> docker compose up -d --build
+```
+
+Trang camera giả: http://localhost:8090 (tài khoản `admin` / `camera-sim-pass`, bấm "Mô phỏng chuyển động"). Trong app thêm camera địa chỉ `camera-sim`, cổng `8000`.
+
 ## Chạy với Zigbee2MQTT thật trên Pi 3
 
 1. Cắm dongle, tìm đường dẫn ổn định: `ls /dev/serial/by-id/`.
 2. Sonoff ZBDongle-E đã cấu hình `adapter: ember`; cần firmware **coordinator** EmberZNet ≥ 7.4.x (xem ghi chú trong `infra/zigbee2mqtt/configuration.yaml`). Đặt `network_key`/`pan_id`/`ext_pan_id` ngẫu nhiên.
 3. Trên Pi: `cd edge && cp .env.example .env` → điền `CLOUD_WS_URL` (dạng `wss://api.<domain>/gw/ws`), `GATEWAY_TOKEN`, `ZIGBEE_DEVICE` → `./gen-secrets.sh` (sinh mật khẩu MQTT ngẫu nhiên vào `.env`; Mosquitto không cho kết nối ẩn danh) → `docker compose up -d`.
-4. Ghép thiết bị: mở Z2M frontend `http://<ip-pi>:8081`, bật *Permit join*, reset công tắc theo hướng dẫn của hãng. Thiết bị tự đồng bộ lên app.
+4. Ghép thiết bị: trong app, mở căn hộ → nút **+** (Thêm thiết bị) trên thanh tiêu đề (quản trị căn hộ), rồi reset công tắc theo hướng dẫn của hãng. App bật *Permit join* qua gateway (tối đa 254 giây, đóng popup là tắt), hiện thiết bị vừa vào mạng và cho đặt tên/chọn phòng ngay. Z2M frontend `http://<ip-pi>:8081` vẫn dùng được khi cần.
 
 `GATEWAY_TOKEN` lấy trong app: vào căn hộ → biểu tượng router (**Bộ điều khiển trung tâm**) → **Thêm** → app hiện `CLOUD_WS_URL` và `GATEWAY_TOKEN` (chỉ hiện một lần; chỉ admin/owner). Hoặc gọi `POST /v1/homes/:home_id/gateways`; script bootstrap làm sẵn cho dev.
 

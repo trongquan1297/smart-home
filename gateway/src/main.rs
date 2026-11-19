@@ -29,6 +29,7 @@ struct Cache {
     devices: Option<Value>,
     states: HashMap<String, Value>,
     online: HashMap<String, bool>,
+    permit_info: Option<Value>, // bản tin bridge/info mới nhất
 }
 
 fn env_or(k: &str, d: &str) -> String {
@@ -83,7 +84,14 @@ async fn main() -> anyhow::Result<()> {
                 match eventloop.poll().await {
                     Ok(Event::Incoming(Packet::ConnAck(_))) => {
                         info!("mqtt connected");
-                        for t in [format!("{base}/bridge/devices"), format!("{base}/+"), format!("{base}/+/availability")] {
+                        let topics = [
+                            format!("{base}/bridge/devices"),
+                            format!("{base}/bridge/info"),  // trạng thái cho phép ghép nối (permit join)
+                            format!("{base}/bridge/event"), // thiết bị mới vào mạng / interview
+                            format!("{base}/+"),
+                            format!("{base}/+/availability"),
+                        ];
+                        for t in topics {
                             if let Err(e) = mqtt.subscribe(t, QoS::AtLeastOnce).await {
                                 warn!("subscribe: {e}");
                             }
@@ -118,6 +126,15 @@ fn to_cloud_msg(base: &str, topic: &str, payload: &[u8], cache: &Mutex<Cache>) -
         c.devices = Some(devices.clone());
         return Some(json!({"type": "devices", "devices": devices}));
     }
+    if rest == "bridge/info" {
+        let info: Value = serde_json::from_slice(payload).ok()?;
+        let msg = permit_msg(&info, now_ms());
+        c.permit_info = Some(info);
+        return Some(msg);
+    }
+    if rest == "bridge/event" {
+        return pair_event_msg(&serde_json::from_slice(payload).ok()?);
+    }
     if let Some(name) = rest.strip_suffix("/availability") {
         if name.contains('/') {
             return None;
@@ -138,11 +155,52 @@ fn to_cloud_msg(base: &str, topic: &str, payload: &[u8], cache: &Mutex<Cache>) -
     Some(json!({"type": "state", "friendly_name": rest, "payload": state}))
 }
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// Trạng thái permit join từ `bridge/info`. Đổi sang "số giây còn lại" ngay trên gateway để điện thoại
+/// không phụ thuộc đồng hồ của Pi. Z2M 2.x báo `permit_join_end` (epoch ms), 1.x báo `permit_join_timeout` (giây).
+fn permit_msg(info: &Value, now: u64) -> Value {
+    let open = info.get("permit_join").and_then(Value::as_bool).unwrap_or(false);
+    let seconds = if !open {
+        0
+    } else if let Some(end) = info.get("permit_join_end").and_then(Value::as_u64) {
+        end.saturating_sub(now).div_ceil(1000)
+    } else {
+        info.get("permit_join_timeout").and_then(Value::as_u64).unwrap_or(0)
+    };
+    json!({"type": "permit", "open": open, "seconds": seconds.min(MAX_PERMIT_SECONDS)})
+}
+
+/// Sự kiện ghép nối từ `bridge/event`: chỉ chuyển các trường cần cho app, bỏ phần còn lại (definition, exposes…).
+fn pair_event_msg(ev: &Value) -> Option<Value> {
+    let kind = ev.get("type").and_then(Value::as_str)?;
+    if !matches!(kind, "device_joined" | "device_interview" | "device_leave") {
+        return None;
+    }
+    let data = ev.get("data")?;
+    let short = |k: &str| data.get(k).and_then(Value::as_str).map(|s| s.chars().take(64).collect::<String>());
+    Some(json!({
+        "type": "pair_event",
+        "event": kind,
+        "ieee": short("ieee_address")?,
+        "friendly_name": short("friendly_name"),
+        "status": short("status"), // device_interview: started | successful | failed
+    }))
+}
+
+/// Z2M chấp nhận tối đa 254 giây cho một lần mở ghép nối.
+const MAX_PERMIT_SECONDS: u64 = 254;
+
 fn replay(cache: &Mutex<Cache>) -> Vec<String> {
     let c = cache.lock().unwrap();
     let mut out = Vec::new();
     if let Some(d) = &c.devices {
         out.push(json!({"type": "devices", "devices": d}).to_string());
+    }
+    if let Some(info) = &c.permit_info {
+        out.push(permit_msg(info, now_ms()).to_string()); // tính lại số giây còn lại theo giờ hiện tại
     }
     for (n, s) in &c.states {
         out.push(json!({"type": "state", "friendly_name": n, "payload": s}).to_string());
@@ -228,6 +286,15 @@ async fn handle_cmd(text: &str, base: &str, mqtt: &AsyncClient, reply_tx: &mpsc:
                 warn!("publish failed: {e}");
             }
         }
+        Some("permit_join") => {
+            // Cho phép thiết bị Zigbee mới vào mạng trong `time` giây (0 = đóng). Z2M trả trạng thái mới qua bridge/info.
+            let time = v.get("time").and_then(Value::as_u64).unwrap_or(0).min(MAX_PERMIT_SECONDS);
+            let topic = format!("{base}/bridge/request/permit_join");
+            info!("cmd -> {topic} time={time}");
+            if let Err(e) = mqtt.publish(topic, QoS::AtLeastOnce, false, json!({ "time": time }).to_string()).await {
+                warn!("publish failed: {e}");
+            }
+        }
         Some("matter_get") | Some("matter_pairing") | Some("matter_remove_fabric") => {
             // Chạy nền: gọi Matterbridge có thể mất vài giây, không chặn vòng lặp nhận lệnh điều khiển.
             let (cfg, tx) = (matter_cfg.clone(), reply_tx.clone());
@@ -256,7 +323,28 @@ async fn handle_cmd(text: &str, base: &str, mqtt: &AsyncClient, reply_tx: &mpsc:
 
 #[cfg(test)]
 mod tests {
-    use super::safe_name;
+    use super::{pair_event_msg, permit_msg, safe_name};
+    use serde_json::json;
+
+    #[test]
+    fn permit_seconds_from_z2m_v1_and_v2() {
+        let v2 = permit_msg(&json!({"permit_join": true, "permit_join_end": 1_000_000 + 59_500}), 1_000_000);
+        assert_eq!(v2, json!({"type": "permit", "open": true, "seconds": 60}));
+        let v1 = permit_msg(&json!({"permit_join": true, "permit_join_timeout": 30}), 0);
+        assert_eq!(v1["seconds"], 30);
+        let closed = permit_msg(&json!({"permit_join": false, "permit_join_end": null}), 5);
+        assert_eq!(closed, json!({"type": "permit", "open": false, "seconds": 0}));
+        // hết hạn nhưng Z2M chưa kịp báo đóng: không âm
+        assert_eq!(permit_msg(&json!({"permit_join": true, "permit_join_end": 10}), 99)["seconds"], 0);
+    }
+
+    #[test]
+    fn pair_events_are_trimmed() {
+        let ev = json!({"type": "device_interview", "data": {"ieee_address": "0x01", "friendly_name": "0x01", "status": "successful", "definition": {"x": 1}}});
+        assert_eq!(pair_event_msg(&ev), Some(json!({"type": "pair_event", "event": "device_interview", "ieee": "0x01", "friendly_name": "0x01", "status": "successful"})));
+        assert_eq!(pair_event_msg(&json!({"type": "device_announce", "data": {"ieee_address": "0x01"}})), None);
+        assert_eq!(pair_event_msg(&json!({"type": "device_joined", "data": {}})), None);
+    }
 
     #[test]
     fn unicode_and_spaces_allowed_but_mqtt_separators_rejected() {

@@ -100,6 +100,19 @@ Gateway (`gateway/src/cast.rs`): luồng mDNS (`mdns-sd`) giữ danh sách loa �
 - Giới hạn/rủi ro: TTS là endpoint không chính thức; CASTV2 chưa thử với thiết bị thật; phát tin làm gián đoạn nhạc đang chạy trên loa; không có hàng đợi bền (gateway mất kết nối hoặc loa tắt lúc đó thì câu bị bỏ); loa phải cùng LAN và truy cập được cổng HTTP của gateway; backend ghi nhận loa theo gateway đầu tiên của căn hộ (`gateway_for_home`).
 - Chưa làm: chọn giọng/tốc độ, âm lượng, cảnh báo khẩn cấp ưu tiên ngắt nhạc, đọc cho thông báo cảm biến (chỉ ngữ cảnh/luật tự chạy), Google Cloud TTS chính thức.
 
+## 4h. Addon camera (go2rtc + ONVIF)
+
+```
+ App ──HTTPS (SDP, ảnh, PTZ)──▶ Backend ◀──WSS (outbound)── msmart-camera ──HTTP 127.0.0.1──▶ go2rtc ──RTSP──▶ camera
+  └──────────────── WebRTC (UDP/TCP 8555, ngang hàng) ─────────────────────────────────────────┘     ▲ ONVIF (PTZ, sự kiện)
+```
+
+- Addon là một gateway khai báo `caps: ["camera"]`. Hub không coi nó là gateway Zigbee (`gateway_for_home`/`gateway_online` bỏ qua gateway có khai báo khả năng nhưng không có `z2m`).
+- Bản tin cloud → addon: `cam_scan`, `cam_add`, `cam_remove`, `cam_webrtc`, `cam_snapshot` (chờ `cam_reply` cùng `id`, như `matter_*`), `cam_ptz` (không chờ). Addon → cloud: `cam_list` (khi kết nối), `cam_status`, `cam_event` (`motion`). Backend chỉ nhận sự kiện/trạng thái cho camera thuộc đúng addon gửi.
+- Mật khẩu camera đi qua RAM của backend đúng một lần (lúc thêm) rồi chỉ addon lưu. go2rtc nhận URL RTSP qua API, file cấu hình go2rtc gắn chỉ-đọc nên mật khẩu không bị ghi vào đó (go2rtc trả 400 khi không lưu được cấu hình — addon xác nhận luồng bằng `GET /api/streams`). API go2rtc không có xác thực khi gọi từ localhost nên chỉ nghe `127.0.0.1`; RTSP của go2rtc tắt.
+- go2rtc không có PTZ và phát hiện chuyển động (đã đối chiếu tài liệu go2rtc v1.9.15): addon tự làm ONVIF (WS-Security PasswordDigest, bù lệch giờ camera bằng GetSystemDateAndTime).
+- **Chưa kiểm chứng với camera thật**: chỉ thử với camera ONVIF giả lập (`infra/camera-sim`). Camera thật có thể khác ở: xác thực HTTP Digest thay cho WS-Security, tên chủ đề/trường sự kiện chuyển động, PullPoint cần header WS-Addressing khác, giới hạn số subscription.
+
 ## 5. Bảo mật — đã làm / còn thiếu
 
 Đã có: mật khẩu argon2 (tối đa 4 lần băm đồng thời để không bị bóp RAM/CPU); gateway/invite token 256-bit chỉ lưu hash SHA-256, hiển thị 1 lần; mã mời dùng 1 lần có hạn; whitelist payload lệnh; agent từ chối tên thiết bị chứa `/ # +` (chống topic injection); container chạy non-root; người ngoài nhận 404; và ba mục dưới đây.
@@ -111,12 +124,12 @@ Gateway (`gateway/src/cast.rs`): luồng mDNS (`mdns-sd`) giữ danh sách loa �
 | Tài khoản | Quyền |
 |---|---|
 | `z2m` (Zigbee2MQTT thật hoặc simulator) | đọc/ghi `zigbee2mqtt/#` |
-| `gateway` | đọc `zigbee2mqtt/#`; chỉ ghi `zigbee2mqtt/+/set` (không giả mạo trạng thái, không gọi `bridge/request/*` như `permit_join`) |
+| `gateway` | đọc `zigbee2mqtt/#`; chỉ ghi `zigbee2mqtt/+/set` và `zigbee2mqtt/bridge/request/permit_join` (ghép thiết bị từ app, chỉ quản trị căn hộ gọi được); không giả mạo trạng thái, không gọi các `bridge/request/*` khác |
 | `matterbridge` | đọc/ghi `zigbee2mqtt/#` (xem lưu ý dưới) |
 
 File mật khẩu do `infra/mosquitto/entrypoint.sh` tạo mỗi lần khởi động từ biến `MQTT_PASSWORD_Z2M/_GATEWAY/_MATTERBRIDGE` (thiếu hoặc <16 ký tự thì broker từ chối chạy), nên repo không chứa mật khẩu nào. Trên Pi: `cd edge && ./gen-secrets.sh` sinh mật khẩu ngẫu nhiên 256-bit vào `edge/.env` (chmod 600, không ghi đè mật khẩu đã có). Compose dev dùng mật khẩu `dev-only-*` vì cổng chỉ mở ở `127.0.0.1`.
 
-Đã kiểm chứng trong dev: ẩn danh và sai mật khẩu bị từ chối; `gateway` không đọc được `$SYS`, publish được `…/set` nhưng `…/bridge/request/permit_join`, topic ngoài cây và ghi đè trạng thái thiết bị đều bị chặn; simulator, gateway và Matterbridge kết nối bình thường. **Chưa kiểm chứng**: Zigbee2MQTT thật đọc `ZIGBEE2MQTT_CONFIG_MQTT_USER/PASSWORD` (tên biến suy ra từ quy tắc trong tài liệu Z2M, tài liệu không liệt kê riêng hai biến này; nếu Z2M báo lỗi đăng nhập thì chuyển sang `secret.yaml`); và plugin Matterbridge cần ghi những topic nào khi Home app điều khiển (nên cấp rộng `zigbee2mqtt/#`, thu hẹp thì phải thử lại).
+Đã kiểm chứng trong dev: ẩn danh và sai mật khẩu bị từ chối; `gateway` không đọc được `$SYS`, publish được `…/set` và `…/bridge/request/permit_join` nhưng `…/bridge/request/device/remove`, topic ngoài cây và ghi đè trạng thái thiết bị đều bị chặn; simulator, gateway và Matterbridge kết nối bình thường. **Chưa kiểm chứng**: Zigbee2MQTT thật đọc `ZIGBEE2MQTT_CONFIG_MQTT_USER/PASSWORD` (tên biến suy ra từ quy tắc trong tài liệu Z2M, tài liệu không liệt kê riêng hai biến này; nếu Z2M báo lỗi đăng nhập thì chuyển sang `secret.yaml`); và plugin Matterbridge cần ghi những topic nào khi Home app điều khiển (nên cấp rộng `zigbee2mqtt/#`, thu hẹp thì phải thử lại).
 
 ### Giới hạn tốc độ
 

@@ -31,6 +31,12 @@ struct Gw {
 }
 
 #[derive(Deserialize)]
+struct CamState {
+    camera_id: Uuid,
+    online: bool,
+}
+
+#[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum GwMsg {
     /// payload của zigbee2mqtt/bridge/devices
@@ -45,6 +51,17 @@ enum GwMsg {
     Hello { caps: Vec<String> },
     /// Trả lời yêu cầu cast_scan (speak::scan)
     CastReply { id: Uuid, devices: Option<Value>, error: Option<String> },
+    /// Trạng thái cho phép ghép thiết bị Zigbee mới (từ bridge/info)
+    Permit { open: bool, seconds: u64 },
+    /// Sự kiện ghép nối từ bridge/event: device_joined | device_interview | device_leave
+    PairEvent { event: String, ieee: String, friendly_name: Option<String>, status: Option<String> },
+    /// Addon camera trả lời yêu cầu cam_* (xem camera.rs). Chỉ các trường đã biết được chuyển tiếp.
+    CamReply { id: Uuid, error: Option<String>, info: Option<Value>, devices: Option<Value>, sdp: Option<String>, jpeg: Option<String> },
+    /// Addon camera vừa kết nối: các camera nó đang giữ.
+    CamList { cameras: Vec<CamState> },
+    CamStatus { camera_id: Uuid, online: bool },
+    /// Sự kiện từ camera (hiện chỉ có "motion").
+    CamEvent { camera_id: Uuid, kind: String },
     Ping,
 }
 
@@ -113,6 +130,9 @@ async fn session(st: AppState, gw: Gw, socket: WebSocket) {
 
     writer.abort();
     st.hub.unregister_gateway(gw.id, &tx);
+    if !st.hub.gateway_connected(gw.id) {
+        crate::camera::on_gateway_gone(&st, gw.id, gw.home_id).await;
+    }
     if !st.hub.gateway_online(gw.home_id) {
         st.hub.publish(gw.home_id, json!({"type": "gateway", "online": false}).to_string());
     }
@@ -155,6 +175,32 @@ async fn handle(st: &AppState, gw: &Gw, msg: GwMsg) -> ApiResult<()> {
         GwMsg::Hello { caps } => st.hub.set_caps(gw.id, caps.into_iter().filter(|c| c.len() <= 16).take(8).collect()),
         GwMsg::CastReply { id, devices, error } => st.hub.resolve(gw.id, id, json!({ "devices": devices, "error": error })),
         GwMsg::MatterReply { id, info, error } => st.hub.resolve(gw.id, id, json!({ "info": info, "error": error })),
+        GwMsg::CamReply { id, error, info, devices, sdp, jpeg } => {
+            st.hub.resolve(gw.id, id, json!({ "error": error, "info": info, "devices": devices, "sdp": sdp, "jpeg": jpeg }))
+        }
+        GwMsg::CamList { cameras } => {
+            let v: Vec<(Uuid, bool)> = cameras.iter().take(256).map(|c| (c.camera_id, c.online)).collect();
+            crate::camera::on_list(st, gw.id, gw.home_id, &v).await?
+        }
+        GwMsg::CamStatus { camera_id, online } => crate::camera::on_status(st, gw.id, camera_id, online).await?,
+        GwMsg::CamEvent { camera_id, kind } => {
+            if kind == "motion" {
+                crate::camera::on_motion(st, gw.id, camera_id).await?
+            }
+        }
+        GwMsg::Permit { open, seconds } => {
+            st.hub.publish(gw.home_id, json!({"type": "permit_join", "open": open, "seconds": seconds.min(254)}).to_string());
+        }
+        GwMsg::PairEvent { event, ieee, friendly_name, status } => {
+            // Không tin dữ liệu gateway: chỉ chuyển tiếp các loại/độ dài đã biết.
+            let short = |s: Option<String>| s.filter(|s| s.len() <= 64);
+            if matches!(event.as_str(), "device_joined" | "device_interview" | "device_leave") && ieee.len() <= 64 {
+                st.hub.publish(
+                    gw.home_id,
+                    json!({"type": "pair_event", "event": event, "ieee": ieee, "friendly_name": short(friendly_name), "status": short(status)}).to_string(),
+                );
+            }
+        }
         GwMsg::Devices { devices } => {
             let mut keep: Vec<String> = Vec::new();
             for d in devices {

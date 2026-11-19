@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -196,6 +197,41 @@ class Api {
     '/v1/devices/$id',
     {'name': ?name, 'room_id': ?roomId, if (clearRoom) 'clear_room': true, if (channels != null) 'channels': channels.map((k, v) => MapEntry(k, v.toJson()))},
   );
+
+  // ---- camera (addon go2rtc) ----
+  Future<List<Camera>> cameras(String homeId) async =>
+      ((await _send('GET', '/v1/homes/$homeId/cameras')) as List).map((e) => Camera.fromJson(Map<String, dynamic>.from(e))).toList();
+  Future<List<FoundCamera>> scanCameras(String homeId) async =>
+      (((await _send('POST', '/v1/homes/$homeId/cameras/scan'))['devices']) as List).map((e) => FoundCamera.fromJson(Map<String, dynamic>.from(e))).toList();
+  Future<Camera> addCamera(String homeId, Map<String, dynamic> body) async =>
+      Camera.fromJson(Map<String, dynamic>.from(await _send('POST', '/v1/homes/$homeId/cameras', body)));
+  Future<void> updateCamera(String id, Map<String, dynamic> body) => _send('PATCH', '/v1/cameras/$id', body);
+  Future<void> deleteCamera(String id) => _send('DELETE', '/v1/cameras/$id');
+
+  /// Gửi SDP offer, nhận SDP answer của go2rtc (qua addon).
+  Future<String> cameraWebrtc(String id, String sdp) async => (await _send('POST', '/v1/cameras/$id/webrtc', {'sdp': sdp}))['sdp'] as String;
+  Future<void> cameraPtz(String id, {double pan = 0, double tilt = 0, double zoom = 0}) =>
+      _send('POST', '/v1/cameras/$id/ptz', {'pan': pan, 'tilt': tilt, 'zoom': zoom});
+
+  /// Ảnh JPEG hiện tại của camera (dự phòng khi WebRTC không nối được).
+  Future<Uint8List> cameraSnapshot(String id, {int width = 640}) async {
+    Future<http.Response> get() =>
+        _client.get(_u('/v1/cameras/$id/snapshot?w=$width'), headers: {'authorization': 'Bearer $token'}).timeout(const Duration(seconds: 20));
+    var res = await get();
+    if (res.statusCode == 401 && await refresh()) res = await get();
+    if (res.statusCode >= 400) {
+      String msg = 'Lỗi ${res.statusCode}';
+      try {
+        msg = (jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>)['error'] ?? msg;
+      } catch (_) {}
+      throw ApiException(res.statusCode, msg);
+    }
+    return res.bodyBytes;
+  }
+
+  /// Mở (seconds > 0) / đóng (0) cửa sổ ghép thiết bị Zigbee mới; trả về số giây máy chủ đã áp dụng.
+  Future<int> permitJoin(String homeId, int seconds) async =>
+      ((await _send('POST', '/v1/homes/$homeId/zigbee/permit-join', {'seconds': seconds}))['seconds'] as num).toInt();
   Future<void> command(String deviceId, Map<String, dynamic> payload) => _send('POST', '/v1/devices/$deviceId/command', {'payload': payload});
 
   // Matter bridge (Google Home / Apple Home). Chỉ admin/owner; phản hồi chứa mã ghép nối nên không lưu cache.

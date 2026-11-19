@@ -24,6 +24,8 @@ const KEEP_DAYS: i32 = 30;
 pub enum Event {
     Presence,
     DoorOpen,
+    /// Camera báo chuyển động (khoá theo id camera).
+    Motion,
 }
 
 impl Event {
@@ -31,6 +33,7 @@ impl Event {
         match self {
             Event::Presence => "presence",
             Event::DoorOpen => "door_open",
+            Event::Motion => "camera_motion",
         }
     }
 }
@@ -53,6 +56,7 @@ pub fn texts(ev: Event, device: &str, scene: &str) -> (String, String) {
     match ev {
         Event::Presence => ("Phát hiện có người".into(), format!("{device} vừa phát hiện chuyển động · chế độ \"{scene}\"")),
         Event::DoorOpen => ("Cửa vừa mở".into(), format!("{device} vừa mở · chế độ \"{scene}\"")),
+        Event::Motion => ("Camera phát hiện chuyển động".into(), device.to_string()),
     }
 }
 
@@ -182,6 +186,7 @@ pub struct NotificationOut {
     body: String,
     device_id: Option<Uuid>,
     scene_id: Option<Uuid>,
+    camera_id: Option<Uuid>,
     created_at: DateTime<Utc>,
 }
 
@@ -189,7 +194,7 @@ pub struct NotificationOut {
 pub async fn list_notifications(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(hid): Path<Uuid>) -> ApiResult<Json<Vec<NotificationOut>>> {
     access::require(&st.db, uid, hid, Role::Member).await?;
     Ok(Json(
-        sqlx::query_as("SELECT id, kind, title, body, device_id, scene_id, created_at FROM notifications WHERE home_id = $1 ORDER BY created_at DESC LIMIT 50")
+        sqlx::query_as("SELECT id, kind, title, body, device_id, scene_id, camera_id, created_at FROM notifications WHERE home_id = $1 ORDER BY created_at DESC LIMIT 50")
             .bind(hid)
             .fetch_all(&st.db)
             .await?,

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../app_model.dart';
 import '../models.dart';
 import '../widgets/ui.dart';
+import 'cameras_screen.dart';
 
 /// Lịch sử cảnh báo cảm biến của căn hộ (30 ngày gần nhất, tối đa 50 dòng). Chỉ thành viên trở lên xem được.
 class NotificationsScreen extends StatefulWidget {
@@ -79,6 +80,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 final n = list[i];
                 final icon = switch (n.kind) {
                   'door_open' => Icons.door_front_door_outlined,
+                  'camera_motion' => Icons.videocam_rounded,
                   'scene_auto' => Icons.auto_awesome_rounded,
                   'scene_failed' => Icons.error_outline_rounded,
                   _ => Icons.directions_walk_rounded,
@@ -91,6 +93,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         'scene_auto' => Vivid.scene,
                         'scene_failed' => Vivid.danger,
                         'door_open' => Vivid.leave,
+                        'camera_motion' => Vivid.info,
                         _ => Vivid.alert,
                       },
                       size: 44,
@@ -98,6 +101,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     title: Text(n.title, style: const TextStyle(fontWeight: FontWeight.w700)),
                     subtitle: Text('${n.body}\n${fmtDateTime(n.createdAt)}'),
                     isThreeLine: true,
+                    // Cảnh báo camera: chạm để mở xem trực tiếp camera đó.
+                    onTap: n.cameraId == null
+                        ? null
+                        : () {
+                            final c = context.read<AppModel>().cameras.where((c) => c.id == n.cameraId).firstOrNull;
+                            if (c != null) openCamera(context, c);
+                          },
                   ),
                 );
               },

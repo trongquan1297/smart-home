@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::{
     access::{self, Role},
     auth::{self, AuthUser},
-    alerts, automation, client_ws, gateway_ws, presence, rules, speak,
+    alerts, automation, camera, client_ws, gateway_ws, presence, rules, speak,
     error::{ApiError, ApiResult},
     AppState,
 };
@@ -66,6 +66,13 @@ pub fn router(st: AppState) -> Router {
         .route("/v1/homes/:hid/notifications", get(alerts::list_notifications))
         .route("/v1/push/tokens", post(alerts::register_token).delete(alerts::delete_token))
         // Matter bridge (Google Home / Apple Home)
+        .route("/v1/homes/:hid/zigbee/permit-join", post(permit_join))
+        .route("/v1/homes/:hid/cameras", get(camera::list).post(camera::add))
+        .route("/v1/homes/:hid/cameras/scan", post(camera::scan))
+        .route("/v1/cameras/:id", patch(camera::update).delete(camera::remove))
+        .route("/v1/cameras/:id/webrtc", post(camera::webrtc))
+        .route("/v1/cameras/:id/snapshot", get(camera::snapshot))
+        .route("/v1/cameras/:id/ptz", post(camera::ptz))
         .route("/v1/homes/:hid/matter", get(matter_info))
         .route("/v1/homes/:hid/matter/pairing", post(matter_pairing))
         .route("/v1/homes/:hid/matter/fabrics/:index", delete(matter_remove_fabric))
@@ -980,6 +987,33 @@ async fn matter_remove_fabric(State(st): State<AppState>, AuthUser(uid): AuthUse
     access::require(&st.db, uid, hid, Role::Admin).await?;
     tracing::warn!(home = %hid, user = %uid, fabric = index, "matter controller removed");
     matter_request(&st, hid, json!({ "type": "matter_remove_fabric", "fabric_index": index })).await
+}
+
+// ───────────────────────── ghép thiết bị Zigbee ─────────────────────────
+
+#[derive(Deserialize)]
+struct PermitJoinReq {
+    /// Số giây cho phép thiết bị mới vào mạng; 0 = đóng.
+    seconds: u64,
+}
+
+/// Mở/đóng cửa sổ ghép nối trên mọi gateway Zigbee của căn hộ. Trạng thái thật (đếm ngược) và thiết bị vừa vào
+/// mạng tới app qua WebSocket (`permit_join`, `pair_event`); thiết bị interview xong tự vào danh sách như mọi khi.
+async fn permit_join(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(hid): Path<Uuid>, Json(b): Json<PermitJoinReq>) -> ApiResult<Json<Value>> {
+    access::require(&st.db, uid, hid, Role::Admin).await?;
+    let seconds = b.seconds.min(254);
+    let gws = st.hub.z2m_gateways_for_home(hid);
+    let mut sent = 0;
+    for gw in gws {
+        if st.hub.send_gateway(gw, json!({"type": "permit_join", "time": seconds}).to_string()).await {
+            sent += 1;
+        }
+    }
+    if sent == 0 {
+        return Err(ApiError::Unavailable("gateway offline".into()));
+    }
+    tracing::warn!(home = %hid, user = %uid, seconds, gateways = sent, "zigbee permit join requested");
+    Ok(Json(json!({ "seconds": seconds, "gateways": sent })))
 }
 
 #[cfg(test)]

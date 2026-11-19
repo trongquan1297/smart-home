@@ -1,0 +1,7 @@
+# Nguồn video thử cho camera giả lập: go2rtc + ffmpeg tạo hình test (có đồng hồ) và phát RTSP ở :8554/cam.
+streams:
+  cam: exec:ffmpeg -hide_banner -re -f lavfi -i testsrc2=size=1280x720:rate=15 -c:v libx264 -preset ultrafast -tune zerolatency -g 30 -pix_fmt yuv420p -rtsp_transport tcp -f rtsp {output}
+api:
+  listen: ""
+log:
+  level: warn

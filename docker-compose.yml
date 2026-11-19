@@ -160,7 +160,45 @@ services:
     depends_on: [backend, cast-sim]
     restart: unless-stopped
 
+  # Addon camera (go2rtc + msmart-camera) + camera ONVIF giả lập:
+  #   COMPOSE_PROFILES=sim,camera CAMERA_GATEWAY_TOKEN=<token gateway tạo trong app> docker compose up -d --build
+  # Camera giả: http://localhost:8090 (tài khoản admin / camera-sim-pass). Trong app thêm camera với địa chỉ `camera-sim`, cổng 8000.
+  camera-video:
+    profiles: ["camera"]
+    image: alexxit/go2rtc:1.9.15
+    volumes:
+      - ./infra/camera-sim/video.yaml:/config/go2rtc.yaml:ro
+  camera-sim:
+    profiles: ["camera"]
+    build: ./infra/camera-sim
+    environment:
+      VIDEO_HOST: camera-video
+    ports:
+      - "127.0.0.1:8090:8090"
+    depends_on: [camera-video]
+  go2rtc:
+    profiles: ["camera"]
+    image: alexxit/go2rtc:1.9.15
+    volumes:
+      - ./infra/camera-sim/go2rtc-dev.yaml:/config/go2rtc.yaml:ro
+    ports:
+      - "127.0.0.1:8555:8555/tcp"
+      - "127.0.0.1:8555:8555/udp"
+  camera-addon:
+    profiles: ["camera"]
+    build: ./addons/camera
+    environment:
+      CLOUD_WS_URL: ${CLOUD_WS_URL:-ws://backend:8080/gw/ws}
+      GATEWAY_TOKEN: ${CAMERA_GATEWAY_TOKEN:-}
+      GO2RTC_URL: http://go2rtc:1984
+      RUST_LOG: info
+    volumes:
+      - camera-addon-data:/data
+    depends_on: [backend, go2rtc, camera-sim]
+    restart: unless-stopped
+
 volumes:
+  camera-addon-data:
   pgdata:
   matterbridge-data:
   zigbee-sim-data:

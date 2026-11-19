@@ -1,0 +1,19 @@
+# go2rtc cho addon camera (chạy network_mode: host trên Pi/máy trong nhà).
+# API không có mật khẩu → chỉ nghe 127.0.0.1, chỉ addon gọi. Luồng camera do addon khai báo qua API (không ghi ở đây,
+# vì URL chứa mật khẩu camera — mật khẩu nằm trong dữ liệu của addon).
+api:
+  listen: "127.0.0.1:1984"
+
+# Không phát lại luồng camera ra LAN qua RTSP (không có xác thực).
+rtsp:
+  listen: ""
+
+# WebRTC: điện thoại kết nối thẳng tới máy này. `stun:8555` để go2rtc tự tìm IP công khai (qua STUN) và báo cho điện thoại.
+# Mở/chuyển tiếp cổng 8555 (UDP + TCP) trên router giúp xem từ xa ổn định hơn; không mở được thì app dùng ảnh chụp dự phòng.
+webrtc:
+  listen: ":8555"
+  candidates:
+    - stun:8555
+
+log:
+  level: warn

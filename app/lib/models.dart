@@ -184,6 +184,7 @@ class Device {
   final String? description; // mô tả model do Zigbee2MQTT báo, vd "Wall switch 3 gang"
   final String? model;
   final String? vendor; // hãng (Aqara, Tuya, VSmart…) do Zigbee2MQTT báo
+  final String? ieee; // địa chỉ IEEE Zigbee: khớp thiết bị vừa ghép nối với sự kiện từ gateway
   final bool isCover; // rèm / cửa cuốn: state OPEN/CLOSE/STOP + position
   final bool hasPosition;
   final bool hasPresence; // cảm biến hiện diện (expose `occupancy`)
@@ -202,6 +203,7 @@ class Device {
     this.description,
     this.model,
     this.vendor,
+    this.ieee,
     this.isCover = false,
     this.hasPosition = false,
     this.hasPresence = false,
@@ -221,6 +223,7 @@ class Device {
     description: j['description'],
     model: j['model'],
     vendor: j['vendor'],
+    ieee: j['ieee_address'],
     isCover: _hasType(j['exposes'], 'cover'),
     hasPosition: _hasCoverPosition(j['exposes']),
     hasPresence: _hasProperty(j['exposes'], 'occupancy'),
@@ -612,17 +615,19 @@ class Scene {
 /// Một thông báo trong lịch sử của căn hộ (cảm biến hiện diện / cửa được kích hoạt).
 class AppNotification {
   final int id;
-  final String kind; // presence | door_open | scene_auto | scene_failed
+  final String kind; // presence | door_open | scene_auto | scene_failed | camera_motion
   final String title;
+  final String? cameraId;
   final String body;
   final DateTime createdAt;
-  AppNotification({required this.id, required this.kind, required this.title, required this.body, required this.createdAt});
+  AppNotification({required this.id, required this.kind, required this.title, required this.body, required this.createdAt, this.cameraId});
   factory AppNotification.fromJson(Map<String, dynamic> j) => AppNotification(
     id: (j['id'] as num).toInt(),
     kind: j['kind'] ?? '',
     title: j['title'] ?? '',
     body: j['body'] ?? '',
     createdAt: DateTime.parse(j['created_at']).toLocal(),
+    cameraId: j['camera_id'],
   );
 }
 
@@ -710,5 +715,63 @@ class FoundSpeaker {
     port: (j['port'] as num?)?.toInt() ?? 8009,
     added: j['added'] == true,
     gatewayId: j['gateway_id'],
+  );
+}
+
+/// Camera Wi‑Fi do addon camera (go2rtc + ONVIF) quản lý. Mật khẩu camera không có ở đây: chỉ addon trong nhà giữ.
+class Camera {
+  final String id;
+  String name;
+  String? roomId;
+  final String host;
+  final String? manufacturer;
+  final String? model;
+  final bool hasPtz;
+  final bool hasEvents;
+  bool motionAlerts;
+  bool online;
+  Camera({
+    required this.id,
+    required this.name,
+    required this.roomId,
+    required this.host,
+    this.manufacturer,
+    this.model,
+    this.hasPtz = false,
+    this.hasEvents = false,
+    this.motionAlerts = true,
+    this.online = false,
+  });
+  factory Camera.fromJson(Map<String, dynamic> j) => Camera(
+    id: j['id'],
+    name: j['name'] ?? '',
+    roomId: j['room_id'],
+    host: j['host'] ?? '',
+    manufacturer: j['manufacturer'],
+    model: j['model'],
+    hasPtz: j['has_ptz'] == true,
+    hasEvents: j['has_events'] == true,
+    motionAlerts: j['motion_alerts'] != false,
+    online: j['online'] == true,
+  );
+  String get subtitle => [manufacturer, model].whereType<String>().where((s) => s.isNotEmpty).join(' · ');
+}
+
+/// Camera ONVIF tìm thấy trong mạng LAN của addon.
+class FoundCamera {
+  final String host;
+  final int port;
+  final String? name;
+  final String? hardware;
+  final String? gatewayId;
+  final bool added;
+  FoundCamera({required this.host, required this.port, this.name, this.hardware, this.gatewayId, this.added = false});
+  factory FoundCamera.fromJson(Map<String, dynamic> j) => FoundCamera(
+    host: j['host'],
+    port: (j['port'] as num?)?.toInt() ?? 80,
+    name: j['name'],
+    hardware: j['hardware'],
+    gatewayId: j['gateway_id'],
+    added: j['added'] == true,
   );
 }

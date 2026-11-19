@@ -1,0 +1,13 @@
+# go2rtc của addon camera khi chạy dev bằng docker compose (mạng bridge, không phải host).
+# API mở trong mạng compose cho addon; WebRTC publish cổng 8555 ra máy dev và báo candidate 127.0.0.1 để iOS Simulator
+# (chạy trên chính máy dev) kết nối được.
+api:
+  listen: ":1984"
+rtsp:
+  listen: ""
+webrtc:
+  listen: ":8555"
+  candidates:
+    - 127.0.0.1:8555
+log:
+  level: info

@@ -53,15 +53,30 @@ impl Hub {
         }
     }
 
-    /// Gateway chỉ làm việc với loa Cast (không có Zigbee2MQTT / Matter bridge): chạy ở máy cùng LAN với loa.
+    /// Gateway có Zigbee2MQTT / Matter bridge. Gateway chỉ làm loa Cast hoặc addon camera thì không.
+    /// Chưa khai báo khả năng (gateway rất cũ, hoặc chưa kịp gửi hello) = coi là gateway Zigbee.
     fn cast_only(c: &GwConn) -> bool {
         let caps = c.caps.lock().unwrap();
-        caps.iter().any(|x| x == "cast") && !caps.iter().any(|x| x == "z2m")
+        !caps.is_empty() && !caps.iter().any(|x| x == "z2m")
+    }
+
+    fn has_cap(c: &GwConn, cap: &str) -> bool {
+        c.caps.lock().unwrap().iter().any(|x| x == cap)
+    }
+
+    /// Mọi addon camera đang kết nối của căn hộ.
+    pub fn camera_gateways_for_home(&self, home_id: Uuid) -> Vec<Uuid> {
+        self.gateways.iter().filter(|g| g.home_id == home_id && Self::has_cap(&g, "camera")).map(|g| *g.key()).collect()
     }
 
     /// Gateway Zigbee/Matter đang kết nối của một căn hộ (mỗi căn hộ dùng một Matter bridge); bỏ qua gateway chỉ làm loa Cast.
     pub fn gateway_for_home(&self, home_id: Uuid) -> Option<Uuid> {
         self.gateways.iter().find(|g| g.home_id == home_id && !Self::cast_only(&g)).map(|g| *g.key())
+    }
+
+    /// Mọi gateway Zigbee đang kết nối của căn hộ (để mở ghép nối trên tất cả).
+    pub fn z2m_gateways_for_home(&self, home_id: Uuid) -> Vec<Uuid> {
+        self.gateways.iter().filter(|g| g.home_id == home_id && !Self::cast_only(&g)).map(|g| *g.key()).collect()
     }
 
     /// Mọi gateway đang kết nối của căn hộ có khả năng cast tới loa (mDNS chạy được).
