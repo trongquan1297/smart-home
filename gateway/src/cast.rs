@@ -306,7 +306,7 @@ impl<S: AsyncReadExt + AsyncWriteExt + Unpin> Chan<S> {
 }
 
 async fn cast_url(host: IpAddr, port: u16, url: &str) -> Result<()> {
-    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
     let cfg = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()?
         .dangerous()

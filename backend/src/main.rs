@@ -6,7 +6,11 @@ mod auth;
 mod client_ws;
 mod error;
 mod gateway_ws;
+mod gsa;
+mod homegraph;
+mod google;
 mod hub;
+mod oauth;
 mod presence;
 mod push;
 mod rules;
@@ -31,6 +35,8 @@ pub struct AppState {
     pub dummy_hash: Arc<String>,
     /// Thông báo đẩy FCM; None nếu chưa cấu hình FCM_SERVICE_ACCOUNT_FILE.
     pub push: Arc<Option<push::Fcm>>,
+    /// Google HomeGraph (Report State + Request Sync); None nếu chưa cấu hình GOOGLE_HOMEGRAPH_SA_FILE.
+    pub homegraph: Arc<Option<homegraph::HomeGraph>>,
     /// Lần báo gần nhất theo (thiết bị, loại sự kiện) để giới hạn tần suất cảnh báo.
     pub alert_seen: Arc<dashmap::DashMap<(uuid::Uuid, alerts::Event), std::time::Instant>>,
     /// Lệnh gần nhất do luật thiết bị phát theo (thiết bị, gang) → (trạng thái, lúc gửi): để phân biệt bản tin phản hồi, không nối chuỗi luật `link`.
@@ -68,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
         ip_header,
         dummy_hash: Arc::new(auth::dummy_hash().await),
         push: Arc::new(push::Fcm::from_env()),
+        homegraph: Arc::new(homegraph::HomeGraph::from_env()),
         alert_seen: Arc::new(dashmap::DashMap::new()),
         rule_cmds: Arc::new(dashmap::DashMap::new()),
     };
@@ -87,6 +94,7 @@ async fn main() -> anyhow::Result<()> {
                 if n % 12 == 0 {
                     auth::purge_expired(&st).await;
                     alerts::purge_old(&st).await;
+                    oauth::purge(&st).await;
                 }
                 n = n.wrapping_add(1);
             }

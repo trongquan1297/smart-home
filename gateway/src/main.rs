@@ -41,6 +41,8 @@ const MQTT_MAX_PACKET: usize = 4 * 1024 * 1024;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Chọn rõ CryptoProvider cho rustls (wss:// lên cloud, TLS tới loa Cast, HTTPS tải TTS).
+    let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();

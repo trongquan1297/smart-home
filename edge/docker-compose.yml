@@ -3,15 +3,25 @@
 #   1) cp .env.example .env  → điền CLOUD_WS_URL, GATEWAY_TOKEN, ZIGBEE_DEVICE
 #   2) ./gen-secrets.sh      → sinh mật khẩu MQTT ngẫu nhiên vào .env (không ghi đè nếu đã có)
 #   3) docker compose up -d
-# Image gateway build sẵn trên máy dev (nhanh hơn build trên Pi 3):
-#   docker buildx build --platform linux/arm64 -t <registry>/smart-gateway:latest ./gateway --push
-# rồi đặt GATEWAY_IMAGE=<registry>/smart-gateway:latest.
+# KHÔNG build trên Pi 3 (chậm, ghi thẻ nhớ nhiều): build trên máy dev rồi chép sang bằng edge/deploy-pi.sh,
+# trên Pi chạy `docker compose up -d --no-build`. Hoặc đẩy lên registry rồi đặt GATEWAY_IMAGE / MATTERBRIDGE_IMAGE.
 name: smarthome-edge
+
+# Giảm ghi thẻ nhớ (xem README, mục "Giảm ghi thẻ nhớ trên Pi"):
+#  * Docker KHÔNG lưu log container (driver none) → `docker logs` trống. Khi cần gỡ lỗi tạm thời:
+#      DOCKER_LOG_DRIVER=local docker compose up -d <service>   (xong thì chạy lại `docker compose up -d` không có biến này)
+#  * /tmp của mọi container nằm trong RAM (tmpfs), không ghi vào lớp ghi của container trên thẻ nhớ.
+x-logging: &logging
+  driver: ${DOCKER_LOG_DRIVER:-none}
+x-tmpfs: &tmpfs
+  - /tmp:size=16m,mode=1777
 
 services:
   mosquitto:
     image: eclipse-mosquitto:2
     restart: unless-stopped
+    logging: *logging
+    tmpfs: *tmpfs
     entrypoint: ["/bin/sh", "/mosquitto/entrypoint.sh"]
     environment: # tạo bằng ./gen-secrets.sh; thiếu/ngắn hơn 16 ký tự thì broker từ chối chạy
       MQTT_PASSWORD_Z2M: ${MQTT_PASSWORD_Z2M:?chạy ./gen-secrets.sh}
@@ -21,7 +31,7 @@ services:
       - ../infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ../infra/mosquitto/acl.conf:/mosquitto/config/acl.conf:ro
       - ../infra/mosquitto/entrypoint.sh:/mosquitto/entrypoint.sh:ro
-      - mosquitto-data:/mosquitto/data
+      - mosquitto-data:/mosquitto/data # chỉ ghi khi broker dừng (autosave_interval 0 trong mosquitto.conf)
     # Chỉ nghe ở loopback của Pi: Matterbridge và gateway (network_mode: host) kết nối qua 127.0.0.1;
     # không lộ ra LAN. Z2M nằm trong network compose nên vẫn gọi được bằng tên `mosquitto`.
     ports:
@@ -30,12 +40,14 @@ services:
   zigbee2mqtt:
     image: koenkk/zigbee2mqtt:latest
     restart: unless-stopped
+    logging: *logging
+    tmpfs: *tmpfs
     depends_on: [mosquitto]
     environment:
       ZIGBEE2MQTT_CONFIG_MQTT_USER: z2m
       ZIGBEE2MQTT_CONFIG_MQTT_PASSWORD: ${MQTT_PASSWORD_Z2M:?chạy ./gen-secrets.sh}
     volumes:
-      - ../infra/zigbee2mqtt:/app/data
+      - ../infra/zigbee2mqtt:/app/data # database.db, coordinator_backup.json, cấu hình: phải giữ lâu dài (ghi ít)
     devices:
       # Nên dùng /dev/serial/by-id/usb-... để không đổi tên khi cắm lại.
       - ${ZIGBEE_DEVICE:-/dev/ttyUSB0}:/dev/ttyACM0
@@ -45,9 +57,12 @@ services:
   # Matter bridge: đưa thiết bị Zigbee2MQTT ra Apple Home / Google Home (xem README, mục Matter).
   # BẮT BUỘC network_mode: host để mDNS/UDP của Matter chạy trên LAN. Pi và điện thoại/loa thông minh phải cùng mạng.
   matterbridge:
+    image: ${MATTERBRIDGE_IMAGE:-smarthome-matterbridge:local}
     build: ../infra/matterbridge
     network_mode: host
     restart: unless-stopped
+    logging: *logging
+    tmpfs: *tmpfs
     stop_grace_period: 60s
     depends_on: [mosquitto, zigbee2mqtt]
     environment:
@@ -64,6 +79,8 @@ services:
     image: ${GATEWAY_IMAGE:-smarthome-gateway:local}
     build: ../gateway
     restart: unless-stopped
+    logging: *logging
+    tmpfs: *tmpfs
     depends_on: [mosquitto, matterbridge]
     network_mode: host # cần để gọi Matterbridge ở 127.0.0.1:8283
     environment:
@@ -78,7 +95,7 @@ services:
       # CAST_HTTP_PORT: "8765"
       # CAST_ADVERTISE_HOST: 192.168.1.10   # chỉ khi Pi có nhiều giao diện mạng và tự chọn sai địa chỉ
       # TTS_URL_TEMPLATE: https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=vi&q={text}
-      RUST_LOG: info
+      RUST_LOG: warn # log chỉ ra stdout (không ghi file); Docker bỏ đi khi logging none
 
 volumes:
   mosquitto-data:

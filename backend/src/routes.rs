@@ -23,6 +23,10 @@ pub fn router(st: AppState) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         // auth
+        // OAuth 2.0 cho liên kết tài khoản Google Home (cloud-to-cloud): trang HTML + endpoint token dạng form.
+        .route("/oauth/authorize", get(crate::oauth::authorize_page).post(crate::oauth::authorize_submit))
+        .route("/oauth/token", post(crate::oauth::token))
+        .route("/google/fulfillment", post(crate::google::fulfillment))
         .route("/v1/auth/register", post(register))
         .route("/v1/auth/login", post(login))
         .route("/v1/auth/refresh", post(refresh))
@@ -100,14 +104,14 @@ struct RegisterReq {
 }
 
 // Giới hạn chống dò mật khẩu / spam tài khoản (cửa sổ trượt, trong RAM — xem ratelimit.rs).
-const LOGIN_WINDOW: std::time::Duration = std::time::Duration::from_secs(15 * 60);
-const LOGIN_FAIL_PER_IP: usize = 20;
-const LOGIN_FAIL_PER_ACCOUNT: usize = 10;
+pub(crate) const LOGIN_WINDOW: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+pub(crate) const LOGIN_FAIL_PER_IP: usize = 20;
+pub(crate) const LOGIN_FAIL_PER_ACCOUNT: usize = 10;
 const REGISTER_WINDOW: std::time::Duration = std::time::Duration::from_secs(3600);
 const REGISTER_PER_IP: usize = 10;
 const REFRESH_FAIL_PER_IP: usize = 30;
 
-fn peer_ip(st: &AppState, headers: &HeaderMap, peer: std::net::SocketAddr) -> std::net::IpAddr {
+pub(crate) fn peer_ip(st: &AppState, headers: &HeaderMap, peer: std::net::SocketAddr) -> std::net::IpAddr {
     crate::ratelimit::client_ip(headers, peer, st.ip_header.as_ref())
 }
 
@@ -645,6 +649,7 @@ async fn delete_gateway(State(st): State<AppState>, AuthUser(uid): AuthUser, Pat
     sqlx::query("DELETE FROM gateways WHERE id = $1").bind(gid).execute(&st.db).await?;
     st.hub.kick_gateway(gid);
     st.hub.publish(hid, json!({"type": "devices_changed"}).to_string());
+    crate::homegraph::home_changed(&st, hid);
     if !st.hub.gateway_online(hid) {
         st.hub.publish(hid, json!({"type": "gateway", "online": false}).to_string());
     }
@@ -726,22 +731,21 @@ async fn update_room(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(r
     if let Some(i) = &b.icon {
         validate_icon(i)?;
     }
-    Ok(Json(
-        sqlx::query_as::<_, RoomOut>(
-            "UPDATE rooms SET name = COALESCE($2, name), icon = COALESCE($3, icon) WHERE id = $1 RETURNING id, home_id, name, icon",
-        )
+    let room = sqlx::query_as::<_, RoomOut>("UPDATE rooms SET name = COALESCE($2, name), icon = COALESCE($3, icon) WHERE id = $1 RETURNING id, home_id, name, icon")
         .bind(rid)
         .bind(name)
         .bind(&b.icon)
         .fetch_one(&st.db)
-        .await?,
-    ))
+        .await?;
+    crate::homegraph::home_changed(&st, hid); // tên phòng là roomHint bên Google
+    Ok(Json(room))
 }
 
 async fn delete_room(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(rid): Path<Uuid>) -> ApiResult<StatusCode> {
     let hid = room_home(&st, rid).await?;
     access::require(&st.db, uid, hid, Role::Admin).await?;
     sqlx::query("DELETE FROM rooms WHERE id=$1").bind(rid).execute(&st.db).await?;
+    crate::homegraph::home_changed(&st, hid);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -841,6 +845,7 @@ async fn update_device(State(st): State<AppState>, AuthUser(uid): AuthUser, Path
         sqlx::query("UPDATE devices SET room_id=NULL WHERE id=$1").bind(did).execute(&st.db).await?;
     }
     st.hub.publish(hid, json!({"type": "devices_changed"}).to_string());
+    crate::homegraph::home_changed(&st, hid);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -950,18 +955,26 @@ impl MatterInfo {
 }
 
 async fn matter_request(st: &AppState, hid: Uuid, msg: Value) -> ApiResult<Response> {
-    let gw = st.hub.gateway_for_home(hid).ok_or_else(|| ApiError::Unavailable("gateway offline".into()))?;
-    let reply = st
-        .hub
-        .request_gateway(gw, msg, std::time::Duration::from_secs(15))
-        .await
-        .map_err(|e| match e {
-            crate::hub::RequestError::Offline => ApiError::Unavailable("gateway offline".into()),
-            crate::hub::RequestError::Timeout => ApiError::Unavailable("gateway did not respond".into()),
-        })?;
-    if reply.get("error").is_some_and(|e| !e.is_null()) {
-        return Err(ApiError::Unavailable("matter bridge unavailable".into()));
+    // Căn hộ có thể có nhiều gateway Zigbee (vd Pi thật + gateway giả lập), không phải cái nào cũng chạy Matterbridge:
+    // thử lần lượt, lấy phản hồi của gateway đầu tiên có Matterbridge trả lời.
+    let gws = st.hub.z2m_gateways_for_home(hid);
+    if gws.is_empty() {
+        return Err(ApiError::Unavailable("gateway offline".into()));
     }
+    let mut last = ApiError::Unavailable("gateway offline".into());
+    let mut reply = None;
+    for gw in gws {
+        match st.hub.request_gateway(gw, msg.clone(), std::time::Duration::from_secs(15)).await {
+            Ok(r) if r.get("error").is_some_and(|e| !e.is_null()) => last = ApiError::Unavailable("matter bridge unavailable".into()),
+            Ok(r) => {
+                reply = Some(r);
+                break;
+            }
+            Err(crate::hub::RequestError::Offline) => {}
+            Err(crate::hub::RequestError::Timeout) => last = ApiError::Unavailable("gateway did not respond".into()),
+        }
+    }
+    let Some(reply) = reply else { return Err(last) };
     let info: MatterInfo = serde_json::from_value(reply["info"].clone()).map_err(|e| ApiError::Internal(anyhow::anyhow!("bad matter reply: {e}")))?;
     // no-store: phản hồi chứa mã ghép nối, không để proxy/trình duyệt lưu lại.
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(info.sanitize())).into_response())

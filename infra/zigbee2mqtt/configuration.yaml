@@ -26,8 +26,14 @@ advanced:
   network_key: GENERATE
   pan_id: GENERATE
   ext_pan_id: GENERATE
-  # Thiết bị chỉ báo trạng thái đầy đủ khi cần thiết -> nhẹ cho Pi 3.
-  log_level: info
+  # Giảm ghi thẻ nhớ: log chỉ ra console (mặc định Z2M ghi thêm file log trong data/log), mức warning.
+  # Nguồn: zigbee2mqtt.io/guide/configuration/logging.html (log_output mặc định [console, file]).
+  log_output:
+    - console
+  log_level: warning
+  # Không lưu trạng thái cache ra đĩa; sau khi Z2M khởi động lại, trạng thái có lại khi thiết bị báo.
+  # Trạng thái hiển thị trong app vẫn lưu ở backend nên không mất.
+  cache_state_persistent: false
   last_seen: ISO_8601
 
 availability:

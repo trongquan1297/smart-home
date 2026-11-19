@@ -62,7 +62,7 @@ Thư mục `/opt/msmart` (SSH: `ssh -J root@113.20.103.158 root@10.60.1.14`), pr
 
 | Dịch vụ | Cổng | Ghi chú |
 |---|---|---|
-| Backend | **18080** (mọi giao diện) | `GET /healthz`, API `/v1/...` |
+| Backend | **18080**, chỉ nhận kết nối từ máy chuyển tiếp Cloudflare `10.60.1.231` | Công khai qua `https://msmart-api.newmoon.cloud` (Cloudflare). `TRUSTED_IP_HEADER=CF-Connecting-IP`; tường lửa: `/usr/local/sbin/msmart-firewall.sh` + `msmart-firewall.service` (luật trong `DOCKER-USER`). Đổi máy chuyển tiếp thì sửa `PROXY=` trong script rồi `systemctl restart msmart-firewall` |
 | Simulator Zigbee2MQTT | **18081** (mọi giao diện) | giao diện web **không có xác thực** |
 | Postgres | không publish | chỉ backend trong mạng compose truy cập |
 | Mosquitto | `127.0.0.1:1883` | |
@@ -171,9 +171,59 @@ Trang camera giả: http://localhost:8090 (tài khoản `admin` / `camera-sim-pa
 1. Cắm dongle, tìm đường dẫn ổn định: `ls /dev/serial/by-id/`.
 2. Sonoff ZBDongle-E đã cấu hình `adapter: ember`; cần firmware **coordinator** EmberZNet ≥ 7.4.x (xem ghi chú trong `infra/zigbee2mqtt/configuration.yaml`). Đặt `network_key`/`pan_id`/`ext_pan_id` ngẫu nhiên.
 3. Trên Pi: `cd edge && cp .env.example .env` → điền `CLOUD_WS_URL` (dạng `wss://api.<domain>/gw/ws`), `GATEWAY_TOKEN`, `ZIGBEE_DEVICE` → `./gen-secrets.sh` (sinh mật khẩu MQTT ngẫu nhiên vào `.env`; Mosquitto không cho kết nối ẩn danh) → `docker compose up -d`.
+   Không build trên Pi: từ máy dev chạy `edge/deploy-pi.sh pi@<ip-pi>` (build image `linux/arm64`, chép qua SSH, `docker compose up -d --no-build` trên Pi; thêm `--camera` cho addon camera, `--no-up` để chỉ chép). Cần SSH bằng khoá; script không ghi đè `.env` và `configuration.yaml` của Z2M trên Pi.
 4. Ghép thiết bị: trong app, mở căn hộ → nút **+** (Thêm thiết bị) trên thanh tiêu đề (quản trị căn hộ), rồi reset công tắc theo hướng dẫn của hãng. App bật *Permit join* qua gateway (tối đa 254 giây, đóng popup là tắt), hiện thiết bị vừa vào mạng và cho đặt tên/chọn phòng ngay. Z2M frontend `http://<ip-pi>:8081` vẫn dùng được khi cần.
 
+### Giảm ghi thẻ nhớ trên Pi
+
+Thẻ SD hỏng chủ yếu do ghi liên tục (log, dữ liệu cache). Cấu hình trong repo đã giảm sẵn:
+
+| Thành phần | Thay đổi | Đánh đổi |
+|---|---|---|
+| Docker (mọi file `edge/docker-compose*.yml`) | `logging: none`, `/tmp` của container là tmpfs (RAM) | `docker logs` trống. Gỡ lỗi tạm: `DOCKER_LOG_DRIVER=local docker compose up -d <service>`, xong chạy lại `docker compose up -d` |
+| Mosquitto | `autosave_interval 0`: chỉ lưu bản tin retained khi broker dừng; log chỉ error/warning ra stdout | Broker chết đột ngột → mất retained tới khi Z2M publish lại (`docker compose restart zigbee2mqtt` nếu thiếu thiết bị) |
+| Zigbee2MQTT | `log_output: [console]` (không ghi file log), `log_level: warning`, `cache_state_persistent: false` | Sau khi Z2M khởi động lại, trạng thái trong Z2M trống tới khi thiết bị báo; backend vẫn giữ trạng thái |
+| Gateway, addon camera | `RUST_LOG=warn`, chỉ ra stdout | — |
+
+Vẫn phải ghi (ít, chỉ khi có thay đổi): `database.db`/`coordinator_backup.json`/cấu hình của Z2M, dữ liệu ghép nối Matter (`matterbridge-data`), danh sách camera của addon. Đây là dữ liệu cần giữ, nên sao lưu.
+
+Mức hệ điều hành (chạy một lần): `sudo ./edge/pi-reduce-writes.sh` — journald chỉ giữ log trong RAM, tắt rsyslog nếu có, đặt Docker mặc định không lưu log (khi chưa có `/etc/docker/daemon.json`), kiểm tra `noatime` và `/tmp`. Thêm `--no-swap` để tắt swap trên thẻ (Pi 3 chỉ có 1 GB RAM, xem `free -m` trước). Khởi động lại Pi sau khi chạy.
+
 `GATEWAY_TOKEN` lấy trong app: vào căn hộ → biểu tượng router (**Bộ điều khiển trung tâm**) → **Thêm** → app hiện `CLOUD_WS_URL` và `GATEWAY_TOKEN` (chỉ hiện một lần; chỉ admin/owner). Hoặc gọi `POST /v1/homes/:home_id/gateways`; script bootstrap làm sẵn cho dev.
+
+## Google Home cloud-to-cloud: máy chủ OAuth 2.0 (liên kết tài khoản)
+
+Backend có sẵn máy chủ OAuth 2.0 (authorization code flow) để người dùng liên kết tài khoản MSmart trong ứng dụng Google Home, theo [yêu cầu của Google](https://developers.home.google.com/cloud-to-cloud/project/authorization). Gồm phần xác thực (OAuth) và fulfillment (`POST /google/fulfillment`).
+
+| Endpoint | Việc |
+|---|---|
+| `GET /oauth/authorize` | Trang đăng nhập + đồng ý (HTML, tiếng Việt). Kiểm tra `client_id`, `redirect_uri` (chỉ nhận `https://oauth-redirect.googleusercontent.com/r/<GOOGLE_PROJECT_ID>` và bản `-sandbox`), `response_type=code` |
+| `POST /oauth/authorize` | Kiểm tra email/mật khẩu (chung giới hạn tốc độ với đăng nhập app) → 303 về `redirect_uri?code=…&state=…` |
+| `POST /oauth/token` | `grant_type=authorization_code` → `access_token` (1 giờ) + `refresh_token`; `grant_type=refresh_token` → `access_token` mới. Client id/secret trong body hoặc HTTP Basic |
+
+- Mã ủy quyền dùng một lần, sống 10 phút, gắn với người dùng + client + `redirect_uri`. Mã bị dùng lại → thu hồi luôn liên kết đã cấp từ mã đó.
+- Refresh token không hết hạn và **không xoay vòng** (Google khuyến nghị để tránh tự huỷ liên kết). Lỗi mã/refresh token trả `400 {"error":"invalid_grant"}`; sai client trả `401 invalid_client`.
+- Mọi mã/token chỉ lưu dạng băm SHA-256 (`oauth_codes`, `oauth_grants`, `oauth_tokens`). Form đăng nhập có chữ ký HMAC trên các tham số của Google (không sửa được `redirect_uri` giữa chừng) và từ chối gửi từ trang khác (`Origin`). Trang cấm nhúng khung, không cache.
+- Fulfillment `POST /google/fulfillment` (xác thực bằng `Authorization: Bearer <access_token>`, extractor `oauth::OAuthUser`):
+  - **SYNC**: thiết bị ở mọi căn hộ người dùng là thành viên trở lên (khách thuê/khách xem không đưa sang Google). Mỗi gang công tắc là một thiết bị Google (id `<uuid>:<khoá gang>`), tên lấy theo tên gang đặt trong app, loại theo loại tải: Đèn → `LIGHT`, Quạt → `FAN`, Ổ cắm → `OUTLET`, còn lại `SWITCH` (trait `OnOff`; bóng đèn có độ sáng thêm `Brightness`). Rèm → `CURTAIN` (`OpenClose`). Cảm biến nhiệt độ/độ ẩm → `SENSOR` chỉ đọc. Phòng → `roomHint`.
+  - **QUERY**: trạng thái từ DB (`on`, `openPercent`, `brightness`, nhiệt độ/độ ẩm); thiết bị hoặc gateway offline → `OFFLINE`.
+  - **EXECUTE**: `OnOff`, `BrightnessAbsolute`, `OpenClose` → lệnh Zigbee2MQTT qua gateway (cùng kiểm tra lệnh và `command_log` như app); gateway offline → `OFFLINE / deviceOffline`; lệnh không hỗ trợ → `functionNotSupported`.
+  - **DISCONNECT**: thu hồi luôn liên kết (refresh + access token).
+- **Report State + Request Sync** qua Google HomeGraph API (bật khi đặt `GOOGLE_HOMEGRAPH_SA_FILE`; khi bật, SYNC khai báo `willReportState: true`):
+  - Trạng thái thiết bị đổi (bấm trong app, bấm công tắc thật, rèm chạy, thiết bị online/offline) → `devices:reportStateAndNotification` cho mọi người đang liên kết Google có quyền với căn hộ. Chỉ gửi phần thật sự đổi so với lần báo trước.
+  - Danh sách thiết bị đổi (ghép/xoá thiết bị, đổi tên, đổi phòng hay loại tải, đổi tên/xoá phòng, xoá gateway) → `devices:requestSync`, gom các thay đổi trong 3 giây và chỉ gửi khi nội dung SYNC thật sự khác lần trước.
+  - Service account: Google Cloud Console của dự án Google Home → bật **HomeGraph API** → tạo service account (vai trò cấp theo hướng dẫn Report State của Google — chưa đối chiếu lại trong lần làm này) → tạo khoá JSON, đặt vào `./secrets/` trên server và `GOOGLE_HOMEGRAPH_SA_FILE=/run/secrets/<file>.json`. Dùng chung đoạn lấy token với FCM (`gsa.rs`).
+- Chưa làm: cảm biến cửa/hiện diện chưa đưa sang Google; đổi quyền thành viên (vd hạ xuống khách) chưa tự Request Sync.
+
+**Cấu hình** (biến môi trường của backend, file `.env` trên server, chmod 600):
+
+```bash
+GOOGLE_OAUTH_CLIENT_ID=google-home        # tự đặt
+GOOGLE_OAUTH_CLIENT_SECRET=$(openssl rand -hex 32)
+GOOGLE_PROJECT_ID=<project id trong Google Home Developer Console>
+```
+
+Trong Google Home Developer Console → dự án cloud-to-cloud → **Account linking**: Client ID và Client secret như trên, Authorization URL `https://<domain>/oauth/authorize`, Token URL `https://<domain>/oauth/token`; phần **Cloud fulfillment URL**: `https://<domain>/google/fulfillment`. Google bắt buộc **HTTPS** cho cả hai URL, nên backend phải có tên miền + chứng chỉ (vd qua Cloudflare Tunnel hoặc reverse proxy).
 
 ## Kết nối Google Home / Apple Home (Matter)
 

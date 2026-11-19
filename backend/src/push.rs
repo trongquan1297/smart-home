@@ -3,34 +3,13 @@
 //! dự án Firebase). Chưa đặt thì mọi lời gọi là no-op: thông báo vẫn được lưu và đẩy realtime tới app đang mở.
 //!
 //! CHƯA ĐƯỢC KIỂM CHỨNG với FCM thật (cần dự án Firebase + thiết bị thật); phần dựng nội dung tin nhắn có unit test.
-use std::time::{Duration, Instant};
-
-use jsonwebtoken::{Algorithm, EncodingKey, Header};
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::AppState;
-
-#[derive(Deserialize)]
-struct ServiceAccount {
-    project_id: String,
-    client_email: String,
-    private_key: String,
-    #[serde(default = "default_token_uri")]
-    token_uri: String,
-}
-
-fn default_token_uri() -> String {
-    "https://oauth2.googleapis.com/token".into()
-}
+use crate::{gsa::ServiceAccount, AppState};
 
 pub struct Fcm {
     sa: ServiceAccount,
-    key: EncodingKey,
-    http: reqwest::Client,
-    token: Mutex<Option<(String, Instant)>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -41,58 +20,21 @@ pub enum SendResult {
     Failed(String),
 }
 
-#[derive(Serialize)]
-struct Claims<'a> {
-    iss: &'a str,
-    scope: &'a str,
-    aud: &'a str,
-    iat: u64,
-    exp: u64,
-}
-
 impl Fcm {
     pub fn from_env() -> Option<Fcm> {
         let path = std::env::var("FCM_SERVICE_ACCOUNT_FILE").ok().filter(|p| !p.trim().is_empty())?;
-        let raw = std::fs::read_to_string(&path).map_err(|e| tracing::error!("push: không đọc được {path}: {e}")).ok()?;
-        let sa: ServiceAccount = serde_json::from_str(&raw).map_err(|e| tracing::error!("push: service account JSON không hợp lệ: {e}")).ok()?;
-        let key = EncodingKey::from_rsa_pem(sa.private_key.as_bytes()).map_err(|e| tracing::error!("push: private_key không hợp lệ: {e}")).ok()?;
-        let http = reqwest::Client::builder().timeout(Duration::from_secs(10)).build().ok()?;
+        let sa = ServiceAccount::load(&path, "https://www.googleapis.com/auth/firebase.messaging", "push")?;
         tracing::info!(project = %sa.project_id, "push: FCM đã bật");
-        Some(Fcm { sa, key, http, token: Mutex::new(None) })
-    }
-
-    async fn access_token(&self) -> anyhow::Result<String> {
-        let mut g = self.token.lock().await;
-        if let Some((t, exp)) = g.as_ref() {
-            if *exp > Instant::now() + Duration::from_secs(60) {
-                return Ok(t.clone());
-            }
-        }
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
-        let claims = Claims { iss: &self.sa.client_email, scope: "https://www.googleapis.com/auth/firebase.messaging", aud: &self.sa.token_uri, iat: now, exp: now + 3600 };
-        let jwt = jsonwebtoken::encode(&Header::new(Algorithm::RS256), &claims, &self.key)?;
-        let res: Value = self
-            .http
-            .post(&self.sa.token_uri)
-            .form(&[("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"), ("assertion", jwt.as_str())])
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
-        let token = res["access_token"].as_str().ok_or_else(|| anyhow::anyhow!("thiếu access_token"))?.to_owned();
-        let ttl = res["expires_in"].as_u64().unwrap_or(3000);
-        *g = Some((token.clone(), Instant::now() + Duration::from_secs(ttl)));
-        Ok(token)
+        Some(Fcm { sa })
     }
 
     pub async fn send(&self, device_token: &str, title: &str, body: &str, data: &Value) -> SendResult {
-        let access = match self.access_token().await {
+        let access = match self.sa.access_token().await {
             Ok(t) => t,
             Err(e) => return SendResult::Failed(format!("lấy access token: {e}")),
         };
         let url = format!("https://fcm.googleapis.com/v1/projects/{}/messages:send", self.sa.project_id);
-        let res = match self.http.post(url).bearer_auth(access).json(&message_body(device_token, title, body, data)).send().await {
+        let res = match self.sa.http.post(url).bearer_auth(access).json(&message_body(device_token, title, body, data)).send().await {
             Ok(r) => r,
             Err(e) => return SendResult::Failed(e.to_string()),
         };

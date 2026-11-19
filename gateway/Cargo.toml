@@ -8,7 +8,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 # Thông báo giọng nói qua Google Cast: mDNS, TLS tới loa (chứng chỉ tự ký), protobuf CASTV2, tải TTS.
 mdns-sd = "0.11"
 prost = "0.13"
-tokio-rustls = "0.26"
+# Chỉ dùng ring (như reqwest/tungstenite): bật cả aws-lc-rs làm rustls không tự chọn được CryptoProvider → panic khi kết nối wss://.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 rumqttc = { version = "0.24", default-features = false }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }

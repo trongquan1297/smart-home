@@ -8,10 +8,18 @@
 # Máy này phải cho loa truy cập cổng HTTP CAST_HTTP_PORT (mặc định 8765) — kiểm tra tường lửa.
 name: smarthome-cast
 
+# Không lưu log container, /tmp trong RAM: giảm ghi thẻ nhớ (gỡ lỗi: DOCKER_LOG_DRIVER=local docker compose ... up -d).
+x-logging: &logging
+  driver: ${DOCKER_LOG_DRIVER:-none}
+x-tmpfs: &tmpfs
+  - /tmp:size=16m,mode=1777
+
 services:
   gateway:
     build: ../gateway
     restart: unless-stopped
+    logging: *logging
+    tmpfs: *tmpfs
     network_mode: host
     environment:
       MQTT_DISABLED: "1"
@@ -20,4 +28,4 @@ services:
       # CAST_HTTP_PORT: "8765"
       # CAST_ADVERTISE_HOST: 192.168.1.10
       # TTS_URL_TEMPLATE: https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=vi&q={text}
-      RUST_LOG: info
+      RUST_LOG: warn

@@ -40,6 +40,14 @@ services:
       # Thông báo đẩy FCM: đặt file service account Firebase vào ./secrets rồi đặt
       # FCM_SERVICE_ACCOUNT_FILE=/run/secrets/fcm.json (để trống = tắt FCM, cảnh báo vẫn tới app qua WebSocket).
       FCM_SERVICE_ACCOUNT_FILE: ${FCM_SERVICE_ACCOUNT_FILE:-}
+      # Google Home cloud-to-cloud (liên kết tài khoản OAuth 2.0): client id/secret do mình tự đặt (secret ≥ 32 ký tự) rồi nhập vào
+      # Google Home Developer Console; GOOGLE_PROJECT_ID quyết định redirect_uri được chấp nhận. Để trống = tắt.
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_PROJECT_ID: ${GOOGLE_PROJECT_ID:-}
+      # Report State + Request Sync qua Google HomeGraph: service account (JSON) của dự án Google Home, đặt trong ./secrets.
+      GOOGLE_HOMEGRAPH_SA_FILE: ${GOOGLE_HOMEGRAPH_SA_FILE:-}
+      HOMEGRAPH_URL: ${HOMEGRAPH_URL:-} # chỉ để thử với máy chủ giả lập
     volumes:
       - ./secrets:/run/secrets:ro
     depends_on:

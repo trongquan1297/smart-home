@@ -246,6 +246,7 @@ async fn handle(st: &AppState, gw: &Gw, msg: GwMsg) -> ApiResult<()> {
                 .execute(&st.db)
                 .await?;
             st.hub.publish(gw.home_id, json!({"type": "devices_changed"}).to_string());
+            crate::homegraph::home_changed(st, gw.home_id);
         }
         GwMsg::State { friendly_name, payload } => {
             if !payload.is_object() {
@@ -266,6 +267,7 @@ async fn handle(st: &AppState, gw: &Gw, msg: GwMsg) -> ApiResult<()> {
                 st.hub.publish(gw.home_id, json!({"type": "device_state", "device_id": id, "state": state}).to_string());
                 crate::alerts::on_state(st, gw.home_id, id, &old_state, &state).await;
                 crate::rules::on_state(st, gw.home_id, id, &old_state, &state).await;
+                crate::homegraph::device_changed(st, gw.home_id, id);
             }
         }
         GwMsg::Availability { friendly_name, online } => {
@@ -279,6 +281,7 @@ async fn handle(st: &AppState, gw: &Gw, msg: GwMsg) -> ApiResult<()> {
             .await?;
             if let Some(id) = id {
                 st.hub.publish(gw.home_id, json!({"type": "device_online", "device_id": id, "online": online}).to_string());
+                crate::homegraph::device_changed(st, gw.home_id, id);
             }
         }
     }

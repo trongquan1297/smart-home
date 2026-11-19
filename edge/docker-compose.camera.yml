@@ -8,23 +8,34 @@
 # Xem từ xa mượt hơn khi router chuyển tiếp cổng 8555 (UDP+TCP) về máy này; không bắt buộc.
 name: smarthome-camera
 
+# Không lưu log container, /tmp trong RAM: giảm ghi thẻ nhớ (gỡ lỗi: DOCKER_LOG_DRIVER=local docker compose ... up -d).
+x-logging: &logging
+  driver: ${DOCKER_LOG_DRIVER:-none}
+x-tmpfs: &tmpfs
+  - /tmp:size=16m,mode=1777
+
 services:
   go2rtc:
     image: alexxit/go2rtc:1.9.15
     restart: unless-stopped
+    logging: *logging
+    tmpfs: *tmpfs
     network_mode: host
     volumes:
       - ../addons/camera/go2rtc.yaml:/config/go2rtc.yaml:ro
 
   camera-addon:
+    image: ${CAMERA_ADDON_IMAGE:-smarthome-camera-addon:local}
     build: ../addons/camera
     restart: unless-stopped
+    logging: *logging
+    tmpfs: *tmpfs
     network_mode: host
     environment:
       CLOUD_WS_URL: ${CLOUD_WS_URL:?set CLOUD_WS_URL, vd wss://api.example.com/gw/ws}
       GATEWAY_TOKEN: ${GATEWAY_TOKEN:?set GATEWAY_TOKEN}
       GO2RTC_URL: http://127.0.0.1:1984
-      RUST_LOG: info
+      RUST_LOG: warn
     volumes:
       - camera-data:/data # mật khẩu camera: chỉ lưu ở đây
     depends_on: [go2rtc]
