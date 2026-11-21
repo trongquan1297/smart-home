@@ -173,6 +173,39 @@ class Room {
   RoomKind get kind => RoomKind.parse(icon) ?? RoomKind.guess(name);
 }
 
+/// Một lõi lọc của máy lọc nước (số liệu do máy báo qua Bluetooth).
+class PurifierFilter {
+  final int no;
+  final String? name;
+  final int? percent, daysLeft, lifeDays, hoursLeft, hoursTotal;
+  const PurifierFilter({required this.no, this.name, this.percent, this.daysLeft, this.lifeDays, this.hoursLeft, this.hoursTotal});
+
+  factory PurifierFilter.fromJson(Map<String, dynamic> j) {
+    int? i(String k) => (j[k] as num?)?.toInt();
+    return PurifierFilter(
+      no: i('no') ?? 0,
+      name: j['name'] as String?,
+      percent: i('percent'),
+      daysLeft: i('days_left'),
+      lifeDays: i('life_days'),
+      hoursLeft: i('hours_left'),
+      hoursTotal: i('hours_total'),
+    );
+  }
+
+  String get label => (name ?? '').isNotEmpty ? 'Lõi $no · $name' : 'Lõi lọc số $no';
+}
+
+/// Mô tả mã lỗi máy lọc (bảng mã của ứng dụng Karofi).
+String purifierErrorText(int code) => switch (code) {
+  1 => 'Bơm chạy liên tục quá 5 giờ',
+  2 => 'Áp lực nước vào yếu',
+  4 => 'Không có nước vào máy',
+  5 => 'Máy có thể đang rò nước',
+  100 => 'TDS nước sau lọc cao',
+  _ => 'Mã lỗi $code',
+};
+
 class Device {
   final String id;
   String name;
@@ -357,6 +390,7 @@ class Device {
   /// Loại nhận dạng của thiết bị, dịch từ mô tả model của Zigbee2MQTT.
   /// Loại thiết bị bằng tiếng Việt, suy từ mô tả model của Zigbee2MQTT (tiếng Anh, khác nhau theo hãng).
   String get typeLabel {
+    if (isPurifier) return 'Máy lọc nước';
     final raw = description ?? '';
     final d = raw.toLowerCase();
     final gang = RegExp(r'(\d)\s*gang').firstMatch(d);
@@ -380,6 +414,26 @@ class Device {
   }
 
   bool get isSensor => kind == 'sensor';
+
+  // ---- máy lọc nước Bluetooth (addon) ----
+  bool get isPurifier => kind == 'purifier';
+
+  /// TDS nước sau lọc (ppm).
+  int? get tds => (state['tds'] as num?)?.toInt();
+
+  /// good | fair | poor | unknown (theo TDS: < 50, ≤ 150, > 150 ppm).
+  String get waterQuality => (state['quality'] as String?) ?? 'unknown';
+
+  /// % còn lại của lõi lọc thấp nhất.
+  int? get filterMin => (state['filter_min'] as num?)?.toInt();
+
+  List<PurifierFilter> get filters => [
+    for (final f in (state['filters'] as List? ?? const []))
+      if (f is Map) PurifierFilter.fromJson(Map<String, dynamic>.from(f)),
+  ];
+
+  /// Mã lỗi máy đang báo (rỗng = bình thường).
+  List<int> get purifierErrors => [for (final e in (state['errors'] as List? ?? const [])) if (e is num) e.toInt()];
 
   /// Số liệu cảm biến hiển thị được (chỉ những thuộc tính thiết bị đã báo).
   /// Quy ước Zigbee2MQTT: contact=true là đóng, false là mở; occupancy=true là có người.
@@ -615,7 +669,7 @@ class Scene {
 /// Một thông báo trong lịch sử của căn hộ (cảm biến hiện diện / cửa được kích hoạt).
 class AppNotification {
   final int id;
-  final String kind; // presence | door_open | scene_auto | scene_failed | camera_motion
+  final String kind; // presence | door_open | scene_auto | scene_failed | camera_motion | purifier_error | filter_low
   final String title;
   final String? cameraId;
   final String body;

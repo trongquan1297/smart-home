@@ -69,6 +69,11 @@ impl Hub {
         self.gateways.iter().filter(|g| g.home_id == home_id && Self::has_cap(&g, "camera")).map(|g| *g.key()).collect()
     }
 
+    /// Mọi addon đang kết nối của căn hộ đọc được máy lọc nước Bluetooth.
+    pub fn purifier_gateways_for_home(&self, home_id: Uuid) -> Vec<Uuid> {
+        self.gateways.iter().filter(|g| g.home_id == home_id && Self::has_cap(&g, "purifier")).map(|g| *g.key()).collect()
+    }
+
     /// Gateway Zigbee/Matter đang kết nối của một căn hộ (mỗi căn hộ dùng một Matter bridge); bỏ qua gateway chỉ làm loa Cast.
     pub fn gateway_for_home(&self, home_id: Uuid) -> Option<Uuid> {
         self.gateways.iter().find(|g| g.home_id == home_id && !Self::cast_only(&g)).map(|g| *g.key())

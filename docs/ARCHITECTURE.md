@@ -100,14 +100,16 @@ Gateway (`gateway/src/cast.rs`): luồng mDNS (`mdns-sd`) giữ danh sách loa �
 - Giới hạn/rủi ro: TTS là endpoint không chính thức; CASTV2 chưa thử với thiết bị thật; phát tin làm gián đoạn nhạc đang chạy trên loa; không có hàng đợi bền (gateway mất kết nối hoặc loa tắt lúc đó thì câu bị bỏ); loa phải cùng LAN và truy cập được cổng HTTP của gateway; backend ghi nhận loa theo gateway đầu tiên của căn hộ (`gateway_for_home`).
 - Chưa làm: chọn giọng/tốc độ, âm lượng, cảnh báo khẩn cấp ưu tiên ngắt nhạc, đọc cho thông báo cảm biến (chỉ ngữ cảnh/luật tự chạy), Google Cloud TTS chính thức.
 
-## 4h. Addon camera (go2rtc + ONVIF)
+## 4h. Addon trong nhà — camera (go2rtc + ONVIF)
+
+Một addon duy nhất (`addons/msmart`, một token gateway) cho mọi thiết bị không đi qua Zigbee; mỗi loại thiết bị là một module và một khả năng trong `hello.caps` (`camera`, `purifier`). Phần dưới là module camera.
 
 ```
- App ──HTTPS (SDP, ảnh, PTZ)──▶ Backend ◀──WSS (outbound)── msmart-camera ──HTTP 127.0.0.1──▶ go2rtc ──RTSP──▶ camera
+ App ──HTTPS (SDP, ảnh, PTZ)──▶ Backend ◀──WSS (outbound)── msmart-addon ──HTTP 127.0.0.1──▶ go2rtc ──RTSP──▶ camera
   └──────────────── WebRTC (UDP/TCP 8555, ngang hàng) ─────────────────────────────────────────┘     ▲ ONVIF (PTZ, sự kiện)
 ```
 
-- Addon là một gateway khai báo `caps: ["camera"]`. Hub không coi nó là gateway Zigbee (`gateway_for_home`/`gateway_online` bỏ qua gateway có khai báo khả năng nhưng không có `z2m`).
+- Addon là một gateway khai báo `caps: ["camera", "purifier"]` (theo `ADDON_DEVICES`). Hub không coi nó là gateway Zigbee (`gateway_for_home`/`gateway_online` bỏ qua gateway có khai báo khả năng nhưng không có `z2m`).
 - Bản tin cloud → addon: `cam_scan`, `cam_add`, `cam_remove`, `cam_webrtc`, `cam_snapshot` (chờ `cam_reply` cùng `id`, như `matter_*`), `cam_ptz` (không chờ). Addon → cloud: `cam_list` (khi kết nối), `cam_status`, `cam_event` (`motion`). Backend chỉ nhận sự kiện/trạng thái cho camera thuộc đúng addon gửi.
 - Mật khẩu camera đi qua RAM của backend đúng một lần (lúc thêm) rồi chỉ addon lưu. go2rtc nhận URL RTSP qua API, file cấu hình go2rtc gắn chỉ-đọc nên mật khẩu không bị ghi vào đó (go2rtc trả 400 khi không lưu được cấu hình — addon xác nhận luồng bằng `GET /api/streams`). API go2rtc không có xác thực khi gọi từ localhost nên chỉ nghe `127.0.0.1`; RTSP của go2rtc tắt.
 - go2rtc không có PTZ và phát hiện chuyển động (đã đối chiếu tài liệu go2rtc v1.9.15): addon tự làm ONVIF (WS-Security PasswordDigest, bù lệch giờ camera bằng GetSystemDateAndTime).

@@ -54,7 +54,7 @@ pub fn router(st: AppState) -> Router {
         .route("/v1/rooms/:rid", patch(update_room).delete(delete_room))
         // devices
         .route("/v1/homes/:hid/devices", get(list_devices))
-        .route("/v1/devices/:did", patch(update_device))
+        .route("/v1/devices/:did", patch(update_device).delete(crate::purifier::remove))
         .route("/v1/devices/:did/command", post(command))
         // ngữ cảnh (scene), có thể tự kích hoạt theo khung giờ
         .route("/v1/homes/:hid/scenes", get(automation::list_scenes).post(automation::create_scene))
@@ -74,6 +74,8 @@ pub fn router(st: AppState) -> Router {
         .route("/v1/push/tokens", post(alerts::register_token).delete(alerts::delete_token))
         // Matter bridge (Google Home / Apple Home)
         .route("/v1/homes/:hid/zigbee/permit-join", post(permit_join))
+        .route("/v1/homes/:hid/purifiers", post(crate::purifier::add))
+        .route("/v1/homes/:hid/purifiers/scan", post(crate::purifier::scan))
         .route("/v1/homes/:hid/cameras", get(camera::list).post(camera::add))
         .route("/v1/homes/:hid/cameras/scan", post(camera::scan))
         .route("/v1/cameras/:id", patch(camera::update).delete(camera::remove))
@@ -931,13 +933,22 @@ pub(crate) fn validate_command(p: &Value) -> ApiResult<()> {
 }
 
 async fn command(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(did): Path<Uuid>, Json(b): Json<CommandReq>) -> ApiResult<(StatusCode, Json<Value>)> {
-    let (hid, gw, fname): (Uuid, Uuid, String) = sqlx::query_as("SELECT home_id, gateway_id, friendly_name FROM devices WHERE id=$1")
+    let (hid, gw, fname, kind): (Uuid, Uuid, String, String) = sqlx::query_as("SELECT home_id, gateway_id, friendly_name, kind FROM devices WHERE id=$1")
         .bind(did)
         .fetch_optional(&st.db)
         .await?
         .ok_or(ApiError::NotFound)?;
+    // Máy lọc nước: chỉ có lệnh đặt lại lõi lọc, cho thành viên trở lên (không cho khách thuê).
+    if kind == "purifier" {
+        access::require(&st.db, uid, hid, Role::Member).await?;
+        if !crate::purifier::valid_reset(&b.payload) {
+            return Err(ApiError::BadRequest("purifier accepts only {\"reset_filter\": 1..16}".into()));
+        }
+    }
     let role = access::require(&st.db, uid, hid, Role::Renter).await?;
-    validate_command(&b.payload)?;
+    if kind != "purifier" {
+        validate_command(&b.payload)?;
+    }
     // Khách thuê chỉ được bật/tắt (state*), không chỉnh độ sáng, màu hay vị trí rèm.
     if role == Role::Renter && b.payload.as_object().is_some_and(|o| o.keys().any(|k| !k.starts_with("state"))) {
         return Err(ApiError::Forbidden);

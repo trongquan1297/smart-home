@@ -1,9 +1,11 @@
 [package]
-name = "msmart-camera"
+name = "msmart-addon"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.85"
 
-# Addon camera Wi‑Fi: chạy trong nhà cạnh go2rtc, kết nối ra cloud như một gateway (khả năng "camera").
+# Addon trong nhà duy nhất của MSmart: mọi thiết bị không đi qua Zigbee, một container, một token gateway.
+# Camera Wi‑Fi (go2rtc + ONVIF) và máy lọc nước Karofi (Bluetooth LE qua BlueZ/btleplug); thêm loại mới: xem src/main.rs.
 # go2rtc lo hình ảnh (WebRTC, ảnh chụp); addon lo ONVIF (tìm camera, PTZ, sự kiện chuyển động) và lưu mật khẩu camera tại chỗ.
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "fs"] }
@@ -20,6 +22,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
+btleplug = "0.11"
 
 [profile.release]
 lto = "thin"

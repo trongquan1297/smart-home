@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../app_model.dart';
 import '../models.dart';
 import 'cameras_screen.dart';
+import 'purifier_screen.dart';
 import 'device_edit_dialog.dart';
 import '../widgets/ui.dart';
 import 'device_rules_sheet.dart';
@@ -75,6 +76,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final kind = await showCenterSheet<String>(context: context, builder: (c) => const _AddKindSheet());
     if (kind == null || !context.mounted) return;
     if (kind == 'camera') return showAddCameraSheet(context);
+    if (kind == 'purifier') return showAddPurifierSheet(context);
     if (!context.read<AppModel>().gatewayOnline) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bộ điều khiển trung tâm đang offline: cần online mới ghép được thiết bị')));
       return;
@@ -850,6 +852,7 @@ class _DeviceCard extends StatelessWidget {
   IconData get _icon {
     final d = device;
     if (d.kind == 'light') return Icons.lightbulb_rounded;
+    if (d.isPurifier) return Icons.water_drop_rounded;
     if (d.isCover) return Icons.window_rounded;
     if (d.isPlug) return Icons.power_rounded;
     return d.isSensor ? Icons.sensors_rounded : Icons.toggle_on_rounded;
@@ -858,6 +861,7 @@ class _DeviceCard extends StatelessWidget {
   List<Color> get _colors {
     final d = device;
     if (d.kind == 'light') return const [Color(0xFFFBBF24), Color(0xFFF97316)];
+    if (d.isPurifier) return Vivid.water;
     if (d.isCover) return const [Color(0xFF3B82F6), Color(0xFF06B6D4)];
     if (d.isPlug) return Vivid.power;
     if (d.isSensor) return const [Color(0xFF8B5CF6), Color(0xFF6366F1)];
@@ -879,6 +883,7 @@ class _DeviceCard extends StatelessWidget {
       child: Card(
         clipBehavior: Clip.antiAlias,
         child: InkWell(
+          onTap: d.isPurifier ? () => openPurifier(context, d) : null,
           onLongPress: isAdmin ? () => showDeviceEditDialog(context, m, d) : null,
           child: Padding(
             padding: const EdgeInsets.all(14),
@@ -889,7 +894,7 @@ class _DeviceCard extends StatelessWidget {
                   children: [
                     AnimatedSwitcher(
                       duration: const Duration(milliseconds: 220),
-                      child: IconBadge(_icon, key: ValueKey(anyOn), colors: _colors, size: 46, muted: !anyOn && !d.isSensor),
+                      child: IconBadge(_icon, key: ValueKey(anyOn), colors: _colors, size: 46, muted: !anyOn && !d.isSensor && !d.isPurifier),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -958,6 +963,10 @@ class _DeviceCard extends StatelessWidget {
                 if (d.isCover) ...[
                   const SizedBox(height: 12),
                   _CoverControls(key: ValueKey('cover-${d.id}'), device: d, enabled: enabled, allowPosition: !(m.home?.isRenter ?? false)),
+                ],
+                if (d.isPurifier) ...[
+                  const SizedBox(height: 12),
+                  PurifierSummary(device: d),
                 ],
                 if (d.readings.isNotEmpty) ...[
                   const SizedBox(height: 12),
@@ -1294,6 +1303,7 @@ class _AddKindSheet extends StatelessWidget {
             const SizedBox(height: 16),
             option('zigbee', Icons.toggle_on_rounded, Vivid.device, 'Thiết bị Zigbee', 'Công tắc, ổ cắm, rèm, cảm biến…'),
             option('camera', Icons.videocam_rounded, Vivid.info, 'Camera', 'Camera Wi‑Fi ONVIF / RTSP'),
+            option('purifier', Icons.water_drop_rounded, Vivid.water, 'Máy lọc nước', 'Karofi có Bluetooth: TDS, tuổi thọ lõi lọc'),
           ],
         ),
       ),

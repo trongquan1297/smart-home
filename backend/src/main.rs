@@ -13,6 +13,7 @@ mod google;
 mod hub;
 mod oauth;
 mod presence;
+mod purifier;
 mod push;
 mod rules;
 mod ratelimit;

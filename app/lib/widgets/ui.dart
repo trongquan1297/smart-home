@@ -18,6 +18,7 @@ class Vivid {
   static const schedule = [Color(0xFF0EA5E9), Color(0xFF22D3EE)];
   static const info = [Color(0xFF0EA5E9), Color(0xFF6366F1)];
   static const danger = [Color(0xFFEF4444), Color(0xFFF43F5E)];
+  static const water = [Color(0xFF06B6D4), Color(0xFF3B82F6)];
 }
 
 /// Màu gradient theo biểu tượng ngữ cảnh (id của SceneKind).

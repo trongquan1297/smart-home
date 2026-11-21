@@ -248,6 +248,13 @@ class Api {
   /// Mở (seconds > 0) / đóng (0) cửa sổ ghép thiết bị Zigbee mới; trả về số giây máy chủ đã áp dụng.
   Future<int> permitJoin(String homeId, int seconds) async =>
       ((await _send('POST', '/v1/homes/$homeId/zigbee/permit-join', {'seconds': seconds}))['seconds'] as num).toInt();
+  /// Máy lọc nước Bluetooth quanh addon (mất ~10 giây).
+  Future<List<Map<String, dynamic>>> scanPurifiers(String homeId) async =>
+      [for (final e in (await _send('POST', '/v1/homes/$homeId/purifiers/scan'))['devices'] as List) Map<String, dynamic>.from(e)];
+  Future<void> addPurifier(String homeId, Map<String, dynamic> body) => _send('POST', '/v1/homes/$homeId/purifiers', body);
+
+  /// Gỡ thiết bị (hiện chỉ máy lọc nước Bluetooth).
+  Future<void> deleteDevice(String deviceId) => _send('DELETE', '/v1/devices/$deviceId');
   Future<void> command(String deviceId, Map<String, dynamic> payload) => _send('POST', '/v1/devices/$deviceId/command', {'payload': payload});
 
   // Matter bridge (Google Home / Apple Home). Chỉ admin/owner; phản hồi chứa mã ghép nối nên không lưu cache.

@@ -12,7 +12,7 @@ Giải pháp nhà thông minh đa khách hàng (multi-tenant): app Flutter → b
 | `backend/` | API Rust (axum + sqlx + Postgres): auth, tenant/căn hộ/phòng/thiết bị/thành viên, WebSocket realtime |
 | `gateway/` | Agent Rust chạy trên Pi: cầu nối MQTT cục bộ ⇄ WebSocket lên cloud |
 | `app/` | App Flutter (Android/iOS) |
-| `addons/camera/` | **Addon camera Wi‑Fi** (Rust): go2rtc + ONVIF — xem trực tiếp, PTZ, cảnh báo chuyển động |
+| `addons/msmart/` | **Addon trong nhà duy nhất** (Rust, một container, một token): mọi thiết bị không đi qua Zigbee — hiện có camera Wi‑Fi (go2rtc + ONVIF — xem trực tiếp, PTZ, cảnh báo chuyển động) và máy lọc nước Karofi qua Bluetooth |
 | `infra/` | Cấu hình Mosquitto, Zigbee2MQTT, **bộ giả lập Zigbee2MQTT có frontend web** |
 | `edge/` | `docker-compose` triển khai thật trên Pi |
 | `scripts/` | `bootstrap-dev.sh` tạo dữ liệu mẫu |
@@ -141,9 +141,23 @@ Menu ⋮ → **Loa thông báo** (quản trị): "Thêm loa" quét mạng LAN c�
 - **TTS dùng endpoint Google Translate không chính thức** (`translate.google.com/translate_tts`): không có tài liệu, có thể bị đổi hoặc chặn bất cứ lúc nào, và dùng ngoài trình duyệt có thể trái điều khoản dịch vụ của Google. Đổi nguồn bằng biến `TTS_URL_TEMPLATE` của gateway (đặt `{text}` là chỗ chèn câu đã mã hoá URL), ví dụ trỏ tới dịch vụ TTS riêng hoặc Google Cloud Text-to-Speech qua một proxy nhỏ.
 - Mỗi loa đọc từng câu một (xếp hàng); khi đọc, loa tạm dừng nhạc đang phát. Câu tối đa 140 ký tự.
 
-## Camera Wi‑Fi (addon go2rtc)
+## Addon trong nhà (camera, máy lọc nước, …)
 
-Addon tách riêng, cài khi cần: [`addons/camera`](addons/camera) chạy cạnh [go2rtc](https://github.com/AlexxIT/go2rtc) trên một máy Linux trong nhà (Pi, NAS, mini PC), kết nối ra cloud bằng một token gateway riêng (khả năng `camera`). Không cần Zigbee.
+Mọi thiết bị không đi qua Zigbee dùng **một addon duy nhất**: [`addons/msmart`](addons/msmart) (image `smarthome-addon`, project compose `msmart-addon`), chạy cạnh [go2rtc](https://github.com/AlexxIT/go2rtc) trên một máy Linux trong nhà (Pi, NAS, mini PC), kết nối ra cloud bằng **một** token gateway riêng. Không cần Zigbee.
+
+- Mỗi loại thiết bị là một module trong `addons/msmart/src/` (`camera/`, `purifier/`), khai báo một khả năng trong `hello.caps`; backend định tuyến lệnh theo khả năng đó. Bật/tắt bằng `ADDON_DEVICES` (mặc định `camera,purifier`).
+- **Thêm loại thiết bị mới**: tạo module (`load` / `run` / `on_connect` / `handle`), thêm một trường vào `Hub`, một khả năng trong `caps()` và một nhánh trong `dispatch()` ở `src/main.rs`; thiết bị dạng cảm biến/công tắc nên gửi `devices` / `state` / `availability` và nhận `set` như gateway Zigbee để backend, app, Google Home dùng lại đường xử lý sẵn có (xem máy lọc nước).
+- Dữ liệu tại chỗ ở volume `msmart-addon_addon-data` (`/data`): `cameras.json` (có mật khẩu camera), `purifiers.json`, … Sao lưu volume này.
+
+Triển khai trên máy trong nhà ([`edge/docker-compose.addon.yml`](edge/docker-compose.addon.yml), cần `network_mode: host`): ghi `CLOUD_WS_URL` và `GATEWAY_TOKEN` vào `edge/.env.addon` (chmod 600), rồi
+
+```bash
+cd edge && docker compose --env-file .env.addon -f docker-compose.addon.yml up -d --build
+```
+
+Hoặc từ máy dev: `edge/deploy-pi.sh pi@<ip-pi> --addon`. Lần đầu từ bản cũ (project `smarthome-camera`), script tự đổi `.env.camera` → `.env.addon`, chép dữ liệu sang volume mới (giữ volume cũ để dự phòng) và gỡ project cũ.
+
+### Camera Wi‑Fi
 
 - **Thêm camera**: app → ⋮ → Camera → **+**. Bấm "Tìm camera trong mạng" (ONVIF WS-Discovery) hoặc nhập IP + cổng ONVIF; camera không có ONVIF thì nhập URL RTSP (không có PTZ/cảnh báo). Addon thử kết nối thật trước khi lưu: sai mật khẩu, sai địa chỉ, chưa bật ONVIF đều báo lỗi rõ.
 - **Mật khẩu camera chỉ nằm ở addon** (`/data/cameras.json`, quyền 600). Cloud chỉ lưu tên, phòng, địa chỉ hiển thị, hãng/model và khả năng (PTZ, sự kiện). Mất volume dữ liệu addon = phải thêm lại camera.
@@ -152,26 +166,34 @@ Addon tách riêng, cài khi cần: [`addons/camera`](addons/camera) chạy cạ
 - **Cảnh báo chuyển động**: addon đăng ký sự kiện ONVIF (PullPoint), mỗi lần chuyển từ "không" sang "có chuyển động" thì cloud lưu thông báo, đẩy realtime + FCM; tối đa 1 lần/phút mỗi camera, bật/tắt theo từng camera. Chạm thông báo để mở camera.
 - Quyền: thành viên trở lên xem/PTZ; chỉ quản trị thêm/sửa/xoá. Khách thuê và khách xem không thấy camera.
 
-Triển khai trên máy trong nhà ([`edge/docker-compose.camera.yml`](edge/docker-compose.camera.yml), cần `network_mode: host`):
+Chạy thử với **camera ONVIF giả lập** (PTZ + sự kiện + video test, không cần camera thật): tạo gateway trong app (đặt tên "Addon"), rồi
 
 ```bash
-cd edge && CLOUD_WS_URL=wss://<backend>/gw/ws GATEWAY_TOKEN=<token tạo trong app> docker compose -f docker-compose.camera.yml up -d --build
-```
-
-Chạy thử với **camera ONVIF giả lập** (PTZ + sự kiện + video test, không cần camera thật): tạo gateway trong app (đặt tên "Camera"), rồi
-
-```bash
-COMPOSE_PROFILES=sim,camera CAMERA_GATEWAY_TOKEN=<token> docker compose up -d --build
+COMPOSE_PROFILES=sim,camera ADDON_GATEWAY_TOKEN=<token> docker compose up -d --build
 ```
 
 Trang camera giả: http://localhost:8090 (tài khoản `admin` / `camera-sim-pass`, bấm "Mô phỏng chuyển động"). Trong app thêm camera địa chỉ `camera-sim`, cổng `8000`.
+
+### Máy lọc nước Karofi (Bluetooth)
+
+Addon đọc máy lọc nước Karofi có Bluetooth (bộ điều khiển Makipos, tên quảng bá `TCM-*`) — cùng container, cùng token, khả năng `purifier`. Giao thức viết lại từ tích hợp Home Assistant mã nguồn mở [luuquangvu/karofi](https://github.com/luuquangvu/karofi) (do cộng đồng tìm hiểu, Karofi không công bố; model khác/firmware mới có thể báo khác). Chưa kiểm thử với máy lọc thật trong repo này.
+
+- **Thêm máy**: app → **+** → Máy lọc nước → addon quét Bluetooth ~8 giây → chọn máy, đặt tên/phòng. Addon phải kết nối và đọc được số liệu thật thì mới lưu (`/data/purifiers.json`, chỉ có địa chỉ MAC).
+- Trên cloud, máy lọc là một **thiết bị bình thường** (`devices.kind = 'purifier'`, `ieee_address` = MAC): addon gửi `devices` / `state` / `availability` như gateway Zigbee. Trạng thái: `tds` (ppm), `quality` (good < 50 · fair ≤ 150 · poor), `filters[]` (`percent` = mức thấp hơn giữa theo lịch `iro_lTime/iro_hsd` và theo giờ chạy `iro_rtr/iro_rtt`, `days_left`, `hours_left`…), `filter_min`, `errors[]`, và `hydrogen` / `water_mode` với máy có.
+- **Đọc định kỳ** mỗi `PURIFIER_POLL_SECS` (mặc định 60 s): kết nối, đọc các đặc tính của dịch vụ `12ac`, gửi `{"et":"NP"}` vào `ab02` và nghe notify `ac02`, rồi ngắt. Chỉ gửi trạng thái lên cloud khi có thay đổi. 3 lần đọc hỏng liên tiếp → offline.
+- **Đã thay lõi**: màn máy lọc → nút đặt lại trên lõi → `POST /v1/devices/:id/command {"payload":{"reset_filter":n}}` (thành viên trở lên) → addon ghi `\x01{"et":"CP","pc":"iro_rsft","d":n-1}\x04`.
+- **Cảnh báo** (gửi cả căn hộ, không phụ thuộc ngữ cảnh): máy báo mã lỗi mới (1 bơm chạy quá 5 giờ, 2 nước vào yếu, 4 không có nước, 5 rò nước, 100 TDS cao) và lõi lọc xuống ≤ 10%.
+- **Google Home**: `SENSOR` + `SensorState` — `FilterLifeTime` (% lõi thấp nhất) và `WaterLeak` (mã lỗi 5). Google không có thuộc tính TDS.
+- Gỡ máy: màn máy lọc → ⋮ → Gỡ (`DELETE /v1/devices/:id`, chỉ áp dụng cho máy lọc).
+
+Máy chạy addon cần **BlueZ** và Bluetooth không bị chặn, container mount `/run/dbus` (đã có trong `edge/docker-compose.addon.yml`). Trên Raspberry Pi OS nếu `bluetoothctl show` báo `PowerState: off-blocked`: `sudo rfkill unblock bluetooth`. Addon chạy bằng user `nobody` (65534): dbus-daemon của máy chủ từ chối uid không có trong `/etc/passwd` của máy chủ (uid 10001 của image). Volume dữ liệu tạo từ bản cũ thì chown một lần: `docker run --rm -v msmart-addon_addon-data:/data debian:bookworm-slim chown -R 65534:65534 /data`. Đặt máy chạy addon trong tầm ~10 m của máy lọc. Bluetooth và Wi‑Fi trên Pi dùng chung chip; đọc mỗi phút một lần là nhẹ.
 
 ## Chạy với Zigbee2MQTT thật trên Pi 3
 
 1. Cắm dongle, tìm đường dẫn ổn định: `ls /dev/serial/by-id/`.
 2. Sonoff ZBDongle-E đã cấu hình `adapter: ember`; cần firmware **coordinator** EmberZNet ≥ 7.4.x (xem ghi chú trong `infra/zigbee2mqtt/configuration.yaml`). Đặt `network_key`/`pan_id`/`ext_pan_id` ngẫu nhiên.
 3. Trên Pi: `cd edge && cp .env.example .env` → điền `CLOUD_WS_URL` (dạng `wss://api.<domain>/gw/ws`), `GATEWAY_TOKEN`, `ZIGBEE_DEVICE` → `./gen-secrets.sh` (sinh mật khẩu MQTT ngẫu nhiên vào `.env`; Mosquitto không cho kết nối ẩn danh) → `docker compose up -d`.
-   Không build trên Pi: từ máy dev chạy `edge/deploy-pi.sh pi@<ip-pi>` (build image `linux/arm64`, chép qua SSH, `docker compose up -d --no-build` trên Pi; thêm `--camera` cho addon camera, `--no-up` để chỉ chép). Cần SSH bằng khoá; script không ghi đè `.env` và `configuration.yaml` của Z2M trên Pi.
+   Không build trên Pi: từ máy dev chạy `edge/deploy-pi.sh pi@<ip-pi>` (build image `linux/arm64`, chép qua SSH, `docker compose up -d --no-build` trên Pi; thêm `--addon` cho addon trong nhà, `--no-up` để chỉ chép). Cần SSH bằng khoá; script không ghi đè `.env` và `configuration.yaml` của Z2M trên Pi.
 4. Ghép thiết bị: trong app, mở căn hộ → nút **+** (Thêm thiết bị) trên thanh tiêu đề (quản trị căn hộ), rồi reset công tắc theo hướng dẫn của hãng. App bật *Permit join* qua gateway (tối đa 254 giây, đóng popup là tắt), hiện thiết bị vừa vào mạng và cho đặt tên/chọn phòng ngay. Z2M frontend `http://<ip-pi>:8081` vẫn dùng được khi cần.
 
 ### Giảm ghi thẻ nhớ trên Pi
@@ -183,9 +205,9 @@ Thẻ SD hỏng chủ yếu do ghi liên tục (log, dữ liệu cache). Cấu h
 | Docker (mọi file `edge/docker-compose*.yml`) | `logging: none`, `/tmp` của container là tmpfs (RAM) | `docker logs` trống. Gỡ lỗi tạm: `DOCKER_LOG_DRIVER=local docker compose up -d <service>`, xong chạy lại `docker compose up -d` |
 | Mosquitto | `autosave_interval 0`: chỉ lưu bản tin retained khi broker dừng; log chỉ error/warning ra stdout | Broker chết đột ngột → mất retained tới khi Z2M publish lại (`docker compose restart zigbee2mqtt` nếu thiếu thiết bị) |
 | Zigbee2MQTT | `log_output: [console]` (không ghi file log), `log_level: warning`, `cache_state_persistent: false` | Sau khi Z2M khởi động lại, trạng thái trong Z2M trống tới khi thiết bị báo; backend vẫn giữ trạng thái |
-| Gateway, addon camera | `RUST_LOG=warn`, chỉ ra stdout | — |
+| Gateway, addon trong nhà | `RUST_LOG=warn`, chỉ ra stdout | — |
 
-Vẫn phải ghi (ít, chỉ khi có thay đổi): `database.db`/`coordinator_backup.json`/cấu hình của Z2M, dữ liệu ghép nối Matter (`matterbridge-data`), danh sách camera của addon. Đây là dữ liệu cần giữ, nên sao lưu.
+Vẫn phải ghi (ít, chỉ khi có thay đổi): `database.db`/`coordinator_backup.json`/cấu hình của Z2M, dữ liệu ghép nối Matter (`matterbridge-data`), danh sách camera và máy lọc nước của addon. Đây là dữ liệu cần giữ, nên sao lưu.
 
 Mức hệ điều hành (chạy một lần): `sudo ./edge/pi-reduce-writes.sh` — journald chỉ giữ log trong RAM, tắt rsyslog nếu có, đặt Docker mặc định không lưu log (khi chưa có `/etc/docker/daemon.json`), kiểm tra `noatime` và `/tmp`. Thêm `--no-swap` để tắt swap trên thẻ (Pi 3 chỉ có 1 GB RAM, xem `free -m` trước). Khởi động lại Pi sau khi chạy.
 

@@ -60,6 +60,8 @@ enum GwMsg {
     /// Addon camera vừa kết nối: các camera nó đang giữ.
     CamList { cameras: Vec<CamState> },
     CamStatus { camera_id: Uuid, online: bool },
+    /// Addon trả lời yêu cầu pur_* (máy lọc nước Bluetooth, xem purifier.rs).
+    PurReply { id: Uuid, error: Option<String>, info: Option<Value>, devices: Option<Value>, ok: Option<bool> },
     /// Sự kiện từ camera (hiện chỉ có "motion").
     CamEvent { camera_id: Uuid, kind: String },
     Ping,
@@ -75,6 +77,9 @@ pub async fn handler(State(st): State<AppState>, headers: HeaderMap, ws: Result<
             .await?;
     let (id, tenant_id, home_id) = row.ok_or(ApiError::Unauthorized)?;
     let gw = Gw { id, tenant_id, home_id, token_hash };
+    // IP nguồn (qua Cloudflare): phân biệt khi hai máy dùng chung một token gateway (đá nhau liên tục).
+    let ip = headers.get("cf-connecting-ip").and_then(|v| v.to_str().ok()).unwrap_or("-").chars().take(45).collect::<String>();
+    tracing::info!(gateway = %id, %ip, "gateway ws upgrade");
     let ws = crate::client_ws::upgrade_or_log("gateway", &headers, ws)?;
     Ok(ws.on_upgrade(move |socket| session(st, gw, socket)))
 }
@@ -146,14 +151,17 @@ async fn touch(st: &AppState, gw: &Gw) {
         .await;
 }
 
-/// Phân loại thiết bị từ `exposes` của Zigbee2MQTT: light | switch | cover | sensor | other.
+/// Phân loại thiết bị từ `exposes` của Zigbee2MQTT: light | switch | cover | sensor | purifier | other.
+/// `purifier` = máy lọc nước Bluetooth do addon báo (có `filters`).
 /// Dựa vào cấu trúc exposes chứ không dựa vào hãng, nên Aqara/Tuya/VSmart… dùng chung một đường xử lý.
 fn kind_of(exposes: &[Value]) -> &'static str {
     let has_type = |t: &str| exposes.iter().any(|e| e.get("type").and_then(Value::as_str) == Some(t));
     let has_prop = |ps: &[&str]| {
         exposes.iter().any(|e| e.get("property").and_then(Value::as_str).is_some_and(|p| ps.contains(&p)))
     };
-    if has_type("light") {
+    if has_prop(&["filters"]) {
+        "purifier"
+    } else if has_type("light") {
         "light"
     } else if has_type("switch") {
         "switch"
@@ -178,6 +186,7 @@ async fn handle(st: &AppState, gw: &Gw, msg: GwMsg) -> ApiResult<()> {
         GwMsg::CamReply { id, error, info, devices, sdp, jpeg } => {
             st.hub.resolve(gw.id, id, json!({ "error": error, "info": info, "devices": devices, "sdp": sdp, "jpeg": jpeg }))
         }
+        GwMsg::PurReply { id, error, info, devices, ok } => st.hub.resolve(gw.id, id, json!({ "error": error, "info": info, "devices": devices, "ok": ok })),
         GwMsg::CamList { cameras } => {
             let v: Vec<(Uuid, bool)> = cameras.iter().take(256).map(|c| (c.camera_id, c.online)).collect();
             crate::camera::on_list(st, gw.id, gw.home_id, &v).await?
@@ -207,8 +216,11 @@ async fn handle(st: &AppState, gw: &Gw, msg: GwMsg) -> ApiResult<()> {
                 if d.get("type").and_then(Value::as_str) == Some("Coordinator") {
                     continue;
                 }
-                let (Some(ieee), Some(fname), Some(def)) = (
-                    d.get("ieee_address").and_then(Value::as_str),
+                let Some(ieee) = d.get("ieee_address").and_then(Value::as_str) else { continue };
+                // Có trong danh sách = vẫn thuộc mạng Zigbee, kể cả khi Z2M chưa nạp xong `definition` (vừa khởi động,
+                // đang interview): giữ lại, chỉ không cập nhật. Trước đây thiết bị như vậy bị xoá → mất tên/phòng/quy tắc.
+                keep.push(ieee.to_owned());
+                let (Some(fname), Some(def)) = (
                     d.get("friendly_name").and_then(Value::as_str),
                     d.get("definition").filter(|v| v.is_object()),
                 ) else {
@@ -237,14 +249,25 @@ async fn handle(st: &AppState, gw: &Gw, msg: GwMsg) -> ApiResult<()> {
                 .bind(def.get("description").and_then(Value::as_str))
                 .execute(&st.db)
                 .await?;
-                keep.push(ieee.to_owned());
             }
-            // Thiết bị đã bị gỡ khỏi Zigbee2MQTT thì gỡ khỏi hệ thống.
-            sqlx::query("DELETE FROM devices WHERE gateway_id = $1 AND NOT (ieee_address = ANY($2))")
-                .bind(gw.id)
-                .bind(&keep)
-                .execute(&st.db)
-                .await?;
+            // Thiết bị đã bị gỡ khỏi Zigbee2MQTT thì gỡ khỏi hệ thống. Danh sách RỖNG thì không xoá gì: Z2M vừa khởi động lại
+            // / mất dongle có thể phát danh sách trống, xoá theo đó là mất tên, phòng, quy tắc của cả căn hộ (gỡ thiết bị thật
+            // thì Z2M gửi danh sách còn lại, không rỗng; máy lọc Bluetooth gỡ qua purifier::remove).
+            if keep.is_empty() {
+                let n: i64 = sqlx::query_scalar("SELECT count(*) FROM devices WHERE gateway_id = $1").bind(gw.id).fetch_one(&st.db).await?;
+                if n > 0 {
+                    tracing::warn!(gateway = %gw.id, existing = n, "empty device list ignored (not deleting)");
+                }
+            } else {
+                let r = sqlx::query("DELETE FROM devices WHERE gateway_id = $1 AND NOT (ieee_address = ANY($2))")
+                    .bind(gw.id)
+                    .bind(&keep)
+                    .execute(&st.db)
+                    .await?;
+                if r.rows_affected() > 0 {
+                    tracing::warn!(gateway = %gw.id, removed = r.rows_affected(), "devices removed (no longer in device list)");
+                }
+            }
             st.hub.publish(gw.home_id, json!({"type": "devices_changed"}).to_string());
             crate::homegraph::home_changed(st, gw.home_id);
         }
@@ -267,6 +290,7 @@ async fn handle(st: &AppState, gw: &Gw, msg: GwMsg) -> ApiResult<()> {
                 st.hub.publish(gw.home_id, json!({"type": "device_state", "device_id": id, "state": state}).to_string());
                 crate::alerts::on_state(st, gw.home_id, id, &old_state, &state).await;
                 crate::rules::on_state(st, gw.home_id, id, &old_state, &state).await;
+                crate::purifier::on_state(st, gw.home_id, id, &old_state, &state).await;
                 crate::homegraph::device_changed(st, gw.home_id, id);
             }
         }
@@ -310,5 +334,7 @@ mod tests {
         assert_eq!(kinds(json!([{"type":"switch","features":[{"type":"binary","property":"state"}]},{"type":"numeric","property":"power"}])), "switch");
         assert_eq!(kinds(json!([{"type":"light","features":[]}])), "light");
         assert_eq!(kinds(json!([{"type":"numeric","property":"battery"}])), "other");
+        // máy lọc nước Bluetooth (addon)
+        assert_eq!(kinds(json!([{"type":"numeric","property":"tds"},{"type":"composite","property":"filters"}])), "purifier");
     }
 }

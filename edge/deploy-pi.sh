@@ -3,7 +3,7 @@
 # buildx), chép image qua SSH (docker save | docker load), đồng bộ file cấu hình, rồi `docker compose up -d --no-build` trên Pi.
 #
 #   edge/deploy-pi.sh pi@10.0.0.20                 # Zigbee2MQTT + Mosquitto + Matterbridge + gateway
-#   edge/deploy-pi.sh pi@10.0.0.20 --camera        # thêm addon camera (go2rtc + camera-addon)
+#   edge/deploy-pi.sh pi@10.0.0.20 --addon         # thêm addon trong nhà (camera, máy lọc nước…; --camera là tên cũ)
 #   edge/deploy-pi.sh pi@10.0.0.20 --no-up         # chỉ chép image + file, không khởi động
 #   BUILD_ONLY=1 edge/deploy-pi.sh                 # chỉ build image trên máy này
 #
@@ -15,11 +15,11 @@ export COPYFILE_DISABLE=1 # tar trên macOS: không đóng gói xattr/metadata c
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TARGET=${1:-}
 shift || true
-CAMERA=0
+ADDON=0
 UP=1
 for a in "$@"; do
   case $a in
-    --camera) CAMERA=1 ;;
+    --addon | --camera) ADDON=1 ;;
     --no-up) UP=0 ;;
     *) echo "tham số lạ: $a" >&2; exit 2 ;;
   esac
@@ -28,7 +28,7 @@ REMOTE_DIR=${REMOTE_DIR:-msmart} # tương đối = trong thư mục home của 
 PLATFORM=linux/arm64
 
 IMAGES=("smarthome-gateway:local|gateway" "smarthome-matterbridge:local|infra/matterbridge")
-[ "$CAMERA" = 1 ] && IMAGES+=("smarthome-camera-addon:local|addons/camera")
+[ "$ADDON" = 1 ] && IMAGES+=("smarthome-addon:local|addons/msmart")
 
 for item in "${IMAGES[@]}"; do
   tag=${item%%|*}
@@ -50,13 +50,13 @@ for item in "${IMAGES[@]}"; do tags+=("${item%%|*}"); done
 docker save "${tags[@]}" | gzip -1 | "${SSH[@]}" 'gunzip | docker load'
 
 echo "== đồng bộ cấu hình vào ~/$REMOTE_DIR"
-"${SSH[@]}" "mkdir -p '$REMOTE_DIR/edge' '$REMOTE_DIR/infra/mosquitto' '$REMOTE_DIR/infra/zigbee2mqtt' '$REMOTE_DIR/infra/matterbridge' '$REMOTE_DIR/addons/camera' '$REMOTE_DIR/gateway'"
+"${SSH[@]}" "mkdir -p '$REMOTE_DIR/edge' '$REMOTE_DIR/infra/mosquitto' '$REMOTE_DIR/infra/zigbee2mqtt' '$REMOTE_DIR/infra/matterbridge' '$REMOTE_DIR/addons/msmart' '$REMOTE_DIR/gateway'"
 # Thư mục build context phải tồn tại để compose đọc file (dù --no-build): chỉ chép Dockerfile, không chép mã nguồn.
 tar --no-xattrs -C "$ROOT" -cf - \
-  edge/docker-compose.yml edge/docker-compose.camera.yml edge/docker-compose.cast.yml edge/.env.example \
+  edge/docker-compose.yml edge/docker-compose.addon.yml edge/docker-compose.cast.yml edge/.env.example \
   edge/gen-secrets.sh edge/pi-reduce-writes.sh \
   infra/mosquitto/mosquitto.conf infra/mosquitto/acl.conf infra/mosquitto/entrypoint.sh \
-  infra/matterbridge/Dockerfile gateway/Dockerfile addons/camera/Dockerfile addons/camera/go2rtc.yaml \
+  infra/matterbridge/Dockerfile gateway/Dockerfile addons/msmart/Dockerfile addons/msmart/go2rtc.yaml \
   | "${SSH[@]}" "tar -C '$REMOTE_DIR' -xf -"
 # Cấu hình Z2M: chỉ chép lần đầu.
 if "${SSH[@]}" "test -f '$REMOTE_DIR/infra/zigbee2mqtt/configuration.yaml'"; then
@@ -74,7 +74,18 @@ fi
 
 echo "== khởi động"
 "${SSH[@]}" "cd '$REMOTE_DIR/edge' && docker compose up -d --no-build --remove-orphans && docker compose ps"
-if [ "$CAMERA" = 1 ]; then
-  # Addon camera dùng token gateway RIÊNG: đặt trong edge/.env.camera trên Pi (CLOUD_WS_URL, GATEWAY_TOKEN).
-  "${SSH[@]}" "cd '$REMOTE_DIR/edge' && if [ -f .env.camera ]; then docker compose --env-file .env.camera -f docker-compose.camera.yml up -d --no-build && docker compose -f docker-compose.camera.yml ps; else echo 'thiếu edge/.env.camera (CLOUD_WS_URL, GATEWAY_TOKEN của addon camera) — bỏ qua camera'; fi"
+if [ "$ADDON" = 1 ]; then
+  # Addon dùng token gateway RIÊNG: edge/.env.addon trên Pi (CLOUD_WS_URL, GATEWAY_TOKEN, chmod 600).
+  # Chuyển từ bản cũ "smarthome-camera" (một lần): đổi tên .env.camera, chép dữ liệu volume cũ, gỡ project cũ.
+  "${SSH[@]}" "cd '$REMOTE_DIR/edge' && set -e
+    if [ ! -f .env.addon ] && [ -f .env.camera ]; then mv .env.camera .env.addon; chmod 600 .env.addon; echo '   .env.camera -> .env.addon'; fi
+    [ -f .env.addon ] || { echo 'thiếu edge/.env.addon (CLOUD_WS_URL, GATEWAY_TOKEN của addon) — bỏ qua addon'; exit 0; }
+    if docker volume inspect smarthome-camera_camera-data >/dev/null 2>&1 && ! docker volume inspect msmart-addon_addon-data >/dev/null 2>&1; then
+      docker compose -p smarthome-camera down
+      docker volume create --label com.docker.compose.project=msmart-addon --label com.docker.compose.volume=addon-data msmart-addon_addon-data >/dev/null
+      docker run --rm --user 0 -v smarthome-camera_camera-data:/from:ro -v msmart-addon_addon-data:/to smarthome-addon:local sh -c 'cp -a /from/. /to/ && chown -R 65534:65534 /to'
+      echo '   đã chép dữ liệu addon cũ sang msmart-addon_addon-data (volume cũ vẫn giữ để dự phòng)'
+    fi
+    docker compose -p smarthome-camera down 2>/dev/null || true
+    docker compose --env-file .env.addon -f docker-compose.addon.yml up -d --no-build --remove-orphans && docker compose -f docker-compose.addon.yml ps"
 fi

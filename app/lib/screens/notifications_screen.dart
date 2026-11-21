@@ -67,7 +67,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     colors: Vivid.bell,
                     title: 'Chưa có thông báo',
                     info:
-                        'Thông báo xuất hiện khi cảm biến được chọn trong ngữ cảnh đang bật phát hiện có người hoặc cửa mở, và khi ngữ cảnh tự chuyển (theo giờ, khi rời nhà).',
+                        'Thông báo xuất hiện khi cảm biến được chọn trong ngữ cảnh đang bật phát hiện có người hoặc cửa mở, khi ngữ cảnh tự chuyển (theo giờ, khi rời nhà), và khi máy lọc nước báo lỗi hoặc lõi lọc sắp hết hạn.',
                   ),
                 ],
               );
@@ -83,6 +83,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   'camera_motion' => Icons.videocam_rounded,
                   'scene_auto' => Icons.auto_awesome_rounded,
                   'scene_failed' => Icons.error_outline_rounded,
+                  'purifier_error' => Icons.water_damage_rounded,
+                  'filter_low' => Icons.filter_alt_rounded,
                   _ => Icons.directions_walk_rounded,
                 };
                 return Card(
@@ -94,6 +96,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         'scene_failed' => Vivid.danger,
                         'door_open' => Vivid.leave,
                         'camera_motion' => Vivid.info,
+                        'purifier_error' => Vivid.danger,
+                        'filter_low' => Vivid.water,
                         _ => Vivid.alert,
                       },
                       size: 44,

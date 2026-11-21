@@ -26,6 +26,9 @@ pub enum Event {
     DoorOpen,
     /// Camera báo chuyển động (khoá theo id camera).
     Motion,
+    /// Máy lọc nước báo lỗi / lõi lọc sắp hết hạn (purifier.rs).
+    PurifierError,
+    FilterLow,
 }
 
 impl Event {
@@ -34,6 +37,8 @@ impl Event {
             Event::Presence => "presence",
             Event::DoorOpen => "door_open",
             Event::Motion => "camera_motion",
+            Event::PurifierError => "purifier_error",
+            Event::FilterLow => "filter_low",
         }
     }
 }
@@ -57,6 +62,7 @@ pub fn texts(ev: Event, device: &str, scene: &str) -> (String, String) {
         Event::Presence => ("Phát hiện có người".into(), format!("{device} vừa phát hiện chuyển động · chế độ \"{scene}\"")),
         Event::DoorOpen => ("Cửa vừa mở".into(), format!("{device} vừa mở · chế độ \"{scene}\"")),
         Event::Motion => ("Camera phát hiện chuyển động".into(), device.to_string()),
+        Event::PurifierError | Event::FilterLow => (String::new(), device.to_string()),
     }
 }
 

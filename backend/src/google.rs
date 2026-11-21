@@ -6,7 +6,8 @@
 //!    người dùng chọn trong app (đèn → LIGHT, quạt → FAN, ổ cắm → OUTLET, còn lại SWITCH), trait OnOff;
 //!    bóng đèn có độ sáng thêm trait Brightness;
 //!  * rèm (cover) = CURTAIN, trait OpenClose (chỉ mở/đóng nếu rèm không báo vị trí);
-//!  * cảm biến nhiệt độ/độ ẩm = SENSOR, TemperatureControl/HumiditySetting chỉ đọc.
+//!  * cảm biến nhiệt độ/độ ẩm = SENSOR, TemperatureControl/HumiditySetting chỉ đọc;
+//!  * máy lọc nước Bluetooth (addon) = SENSOR, SensorState: FilterLifeTime (% lõi thấp nhất) + WaterLeak (mã lỗi 5).
 //! Chỉ thiết bị ở căn hộ mà người dùng là thành viên trở lên (khách thuê/khách xem không đưa sang Google).
 use axum::{extract::State, Json};
 use serde_json::{json, Map, Value};
@@ -147,6 +148,16 @@ pub(crate) fn sync_devices(d: &Row, report: bool) -> Vec<Value> {
         out.push(base(d.id.to_string(), "CURTAIN", vec!["OpenClose"], d.name.clone(), attrs));
         return out;
     }
+    if d.kind == "purifier" {
+        // Google không có TDS; báo tuổi thọ lõi lọc và rò nước qua SensorState (chỉ đọc).
+        let attrs = json!({"sensorStatesSupported": [
+            {"name": "FilterLifeTime", "descriptiveCapabilities": {"availableStates": ["new", "good", "replace soon", "replace now", "unknown"]},
+             "numericCapabilities": {"rawValueUnit": "PERCENTAGE"}},
+            {"name": "WaterLeak", "descriptiveCapabilities": {"availableStates": ["leak", "no leak", "unknown"]}}
+        ]});
+        out.push(base(d.id.to_string(), "SENSOR", vec!["SensorState"], d.name.clone(), attrs));
+        return out;
+    }
     let keys = switch_keys(&d.exposes);
     for k in &keys {
         let ch = d.channels.get(k);
@@ -225,6 +236,26 @@ pub(crate) fn query_state(d: &Row, key: Option<&str>, online: bool) -> Value {
                 _ => 0,
             });
             s["openPercent"] = json!(pct.min(100));
+        }
+        None if d.kind == "purifier" => {
+            let pct = st.get("filter_min").and_then(Value::as_i64);
+            let life = match pct {
+                None => "unknown",
+                Some(p) if p >= 90 => "new",
+                Some(p) if p > 20 => "good",
+                Some(p) if p > 5 => "replace soon",
+                Some(_) => "replace now",
+            };
+            let mut filter = json!({"name": "FilterLifeTime", "currentSensorState": life});
+            if let Some(p) = pct {
+                filter["rawValue"] = json!(p.clamp(0, 100));
+            }
+            let leak = match st.get("errors").and_then(Value::as_array) {
+                None => "unknown",
+                Some(e) if e.iter().any(|c| c.as_i64() == Some(5)) => "leak",
+                Some(_) => "no leak",
+            };
+            s["currentSensorStateData"] = json!([filter, {"name": "WaterLeak", "currentSensorState": leak}]);
         }
         None => {
             if let Some(t) = st.get("temperature").and_then(Value::as_f64) {
@@ -427,6 +458,18 @@ mod tests {
             online: true,
             room: Some("Phòng khách".into()),
         }
+    }
+
+    #[test]
+    fn purifier_sensor_state() {
+        let d = row("purifier", json!([{"type":"composite","property":"filters"}]), json!({}), json!({"tds": 12, "filter_min": 15, "errors": [5]}));
+        let devs = sync_devices(&d, true);
+        assert_eq!(devs.len(), 1);
+        assert_eq!(devs[0]["type"], "action.devices.types.SENSOR");
+        assert_eq!(devs[0]["traits"], json!(["action.devices.traits.SensorState"]));
+        let q = query_state(&d, None, true);
+        assert_eq!(q["currentSensorStateData"][0], json!({"name": "FilterLifeTime", "currentSensorState": "replace soon", "rawValue": 15}));
+        assert_eq!(q["currentSensorStateData"][1]["currentSensorState"], "leak");
     }
 
     #[test]

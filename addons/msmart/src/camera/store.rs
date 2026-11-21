@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::onvif::Probe;
+use super::onvif::Probe;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Camera {
