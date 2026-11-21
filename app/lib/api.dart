@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -32,12 +33,39 @@ class Api {
 
   Uri _u(String path) => Uri.parse('$apiUrl$path');
 
+  /// Lỗi mạng xảy ra TRƯỚC khi yêu cầu tới được máy chủ (chưa phân giải được tên miền, chưa mở được kết nối):
+  /// gửi lại an toàn với mọi phương thức. Hay gặp ngay lúc mở app khi điện thoại vừa thức dậy / đổi Wi‑Fi ↔ 4G
+  /// và mạng chưa sẵn sàng (Android báo "Failed host lookup … errno = 7").
+  static bool _notSent(Object e) {
+    final s = e.toString();
+    return s.contains('Failed host lookup') || s.contains('Connection refused') || s.contains('Network is unreachable') || s.contains('Connection failed');
+  }
+
+  Future<http.Response> _sendWithRetry(String method, String path, Object? body, String? bearer) async {
+    const delays = [Duration(milliseconds: 600), Duration(milliseconds: 1500), Duration(seconds: 3)];
+    for (var attempt = 0;; attempt++) {
+      final req = http.Request(method, _u(path))
+        ..headers['content-type'] = 'application/json'
+        ..headers.addAll({if (bearer != null) 'authorization': 'Bearer $bearer'});
+      if (body != null) req.body = jsonEncode(body);
+      try {
+        return await http.Response.fromStream(await _client.send(req).timeout(const Duration(seconds: 15)));
+      } on http.ClientException catch (e) {
+        // GET không đổi dữ liệu nên gửi lại được cả khi lỗi giữa chừng (mất kết nối, reset).
+        if (attempt < delays.length && (_notSent(e) || method == 'GET')) {
+          await Future.delayed(delays[attempt]);
+          continue;
+        }
+        throw ApiException(0, 'Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại.');
+      } on TimeoutException {
+        if (attempt < 1 && method == 'GET') continue;
+        throw ApiException(0, 'Máy chủ phản hồi quá lâu. Kiểm tra mạng rồi thử lại.');
+      }
+    }
+  }
+
   Future<dynamic> _request(String method, String path, Object? body, String? bearer) async {
-    final req = http.Request(method, _u(path))
-      ..headers['content-type'] = 'application/json'
-      ..headers.addAll({if (bearer != null) 'authorization': 'Bearer $bearer'});
-    if (body != null) req.body = jsonEncode(body);
-    final res = await http.Response.fromStream(await _client.send(req).timeout(const Duration(seconds: 15)));
+    final res = await _sendWithRetry(method, path, body, bearer);
     final text = utf8.decode(res.bodyBytes);
     if (res.statusCode >= 400) {
       Map<String, dynamic> j = {};
@@ -50,6 +78,8 @@ class Api {
         msg = 'Thử quá nhiều lần. Vui lòng đợi khoảng $mins phút rồi thử lại.';
       } else if (res.statusCode == 401 && path == '/v1/auth/login') {
         msg = 'Email hoặc mật khẩu không đúng.';
+      } else if (res.statusCode == 401 && path == '/v1/auth/sso') {
+        msg = 'Không xác minh được tài khoản Google/Apple. Vui lòng thử lại.';
       }
       throw ApiException(res.statusCode, msg);
     }

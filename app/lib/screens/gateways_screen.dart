@@ -221,7 +221,7 @@ class _GatewaysScreenState extends State<GatewaysScreen> {
             SliverAppBar.large(
               title: const Text('Bộ điều khiển'),
               actions: [
-                HeaderAction(icon: Icons.add_rounded, tooltip: 'Thêm bộ điều khiển', onPressed: _add),
+                IconButton(icon: const Icon(Icons.add_rounded), tooltip: 'Thêm bộ điều khiển', onPressed: _add),
                 const SizedBox(width: 8),
               ],
             ),

@@ -102,19 +102,8 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Logo MSmart (đã gồm tên app) thay cho biểu tượng + chữ tên.
-                    Container(
-                      width: 150,
-                      height: 150,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(36),
-                        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: .22), blurRadius: 24, offset: const Offset(0, 10))],
-                      ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(36),
-                        child: Image.asset('assets/logo.png', fit: BoxFit.cover, semanticLabel: 'MSmart'),
-                      ),
-                    ),
+                    // Logo MSmart (đã gồm tên app, nền trong suốt) đặt thẳng trên nền gradient.
+                    Image.asset('assets/logo.png', width: 190, height: 190, fit: BoxFit.contain, semanticLabel: 'MSmart'),
                     const SizedBox(height: 16),
                     Text('Điều khiển ngôi nhà của bạn, ở mọi nơi', style: tt.bodyMedium?.copyWith(color: Colors.white.withValues(alpha: .85))),
                     const SizedBox(height: 28),

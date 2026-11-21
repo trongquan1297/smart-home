@@ -1,4 +1,5 @@
 // Chạy: flutter test --dart-define=API_URL=http://127.0.0.1:18080 test/api_refresh_test.dart
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -139,4 +140,27 @@ void main() {
     s = FakeServer();
     await s.start(); // để tearDown dọn được
   });
+
+  test('mạng chưa sẵn sàng lúc mở app: tự thử lại tới khi máy chủ nghe được', () async {
+    await s.stop(); // chưa ai nghe cổng → "Connection refused" (giống lúc mạng chưa lên)
+    s = FakeServer();
+    s.validAccess = 'old-access';
+    unawaited(Future.delayed(const Duration(milliseconds: 900), s.start));
+    expect((await api.me())['ok'], true);
+  });
+
+  test('mất mạng hẳn: báo lỗi tiếng Việt dễ hiểu, không lộ chi tiết kỹ thuật, không đăng xuất', () async {
+    await s.stop();
+    s = FakeServer();
+    Object? e;
+    try {
+      await api.me();
+    } catch (err) {
+      e = err;
+    }
+    expect(e, isA<ApiException>());
+    expect(e.toString(), 'Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại.');
+    expect(expired, 0);
+    await s.start(); // để tearDown đóng được
+  }, timeout: const Timeout(Duration(seconds: 30)));
 }

@@ -454,22 +454,8 @@ class _RoomTabsHeader extends SliverPersistentHeaderDelegate {
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (_, i) {
           if (i == tabs.length) {
-            // Nút thêm phòng: tab cuối cùng, viền màu chủ đạo.
-            return Tooltip(
-              message: 'Thêm phòng',
-              child: Material(
-                color: cs.primaryContainer,
-                shape: StadiumBorder(side: BorderSide(color: cs.primary.withValues(alpha: .5))),
-                child: InkWell(
-                  customBorder: const StadiumBorder(),
-                  onTap: onAdd,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 14),
-                    child: Icon(Icons.add_rounded, color: cs.primary),
-                  ),
-                ),
-              ),
-            );
+            // Nút thêm phòng: tab cuối cùng, chỉ biểu tượng (không nền/viền).
+            return IconButton(icon: Icon(Icons.add_rounded, color: cs.primary), tooltip: 'Thêm phòng', onPressed: onAdd);
           }
           final t = tabs[i];
           final on = t.key == selected;
@@ -777,7 +763,13 @@ class _RoomSection extends StatelessWidget {
               Expanded(
                 child: InkWell(
                   borderRadius: BorderRadius.circular(16),
-                  onTap: editable ? () => showRoomSheet(context, m, room: room) : null,
+                  // Sửa phòng: nhấn giữ tiêu đề phòng.
+                  onLongPress: editable
+                      ? () {
+                          HapticFeedback.mediumImpact();
+                          showRoomSheet(context, m, room: room);
+                        }
+                      : null,
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
                     child: Row(
@@ -804,7 +796,6 @@ class _RoomSection extends StatelessWidget {
                             ],
                           ),
                         ),
-                        if (editable) Icon(Icons.edit_outlined, size: 18, color: cs.outline),
                       ],
                     ),
                   ),
@@ -830,7 +821,7 @@ class _RoomSection extends StatelessWidget {
             child: Row(
               children: [
                 Pill(Icons.inbox_rounded, 'Trống'),
-                InfoTip('Phòng trống', 'Bấm biểu tượng bút chì trên một thiết bị để chuyển thiết bị vào phòng này.'),
+                InfoTip('Phòng trống', 'Bấm giữ trên một thiết bị để chuyển thiết bị vào phòng này.'),
               ],
             ),
           ),
@@ -884,7 +875,13 @@ class _DeviceCard extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: d.isPurifier ? () => openPurifier(context, d) : null,
-          onLongPress: isAdmin ? () => showDeviceEditDialog(context, m, d) : null,
+          // Sửa thiết bị (tên, loại, phòng): nhấn giữ thẻ.
+          onLongPress: isAdmin
+              ? () {
+                  HapticFeedback.mediumImpact();
+                  showDeviceEditDialog(context, m, d);
+                }
+              : null,
           child: Padding(
             padding: const EdgeInsets.all(14),
             child: Column(
@@ -907,24 +904,17 @@ class _DeviceCard extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: tt.titleSmall?.copyWith(fontWeight: FontWeight.w700),
                           ),
-                          const SizedBox(height: 2),
-                          Row(
-                            children: [
-                              Container(
-                                width: 8,
-                                height: 8,
-                                decoration: BoxDecoration(color: d.online ? const Color(0xFF2EBD6B) : cs.outline, shape: BoxShape.circle),
-                              ),
-                              const SizedBox(width: 6),
-                              Flexible(
-                                child: Text(
-                                  '${(d.vendor ?? '').isNotEmpty ? '${d.vendor} · ' : ''}${d.typeLabel}${d.online ? '' : ' · Offline'}',
-                                  overflow: TextOverflow.ellipsis,
-                                  style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                                ),
-                              ),
-                            ],
-                          ),
+                          // Không hiện hãng / loại thiết bị; chỉ báo khi thiết bị mất kết nối.
+                          if (!d.online) ...[
+                            const SizedBox(height: 2),
+                            Row(
+                              children: [
+                                Container(width: 8, height: 8, decoration: BoxDecoration(color: cs.outline, shape: BoxShape.circle)),
+                                const SizedBox(width: 6),
+                                Text('Offline', style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
+                              ],
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -934,13 +924,6 @@ class _DeviceCard extends StatelessWidget {
                         tooltip: 'Tự động hoá',
                         visualDensity: VisualDensity.compact,
                         onPressed: () => showDeviceRulesSheet(context, m, d),
-                      ),
-                    if (isAdmin)
-                      IconButton(
-                        icon: const Icon(Icons.edit_outlined, size: 20),
-                        tooltip: 'Đổi tên / loại',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () => showDeviceEditDialog(context, m, d),
                       ),
                   ],
                 ),

@@ -331,7 +331,7 @@ class _MembersScreenState extends State<MembersScreen> {
             SliverAppBar.large(
               title: const Text('Thành viên'),
               actions: [
-                if (home.isAdmin) HeaderAction(icon: Icons.person_add_alt_1_rounded, tooltip: 'Mời thành viên', onPressed: _invite),
+                if (home.isAdmin) IconButton(icon: const Icon(Icons.person_add_alt_1_rounded), tooltip: 'Mời thành viên', onPressed: _invite),
                 const SizedBox(width: 8),
               ],
             ),

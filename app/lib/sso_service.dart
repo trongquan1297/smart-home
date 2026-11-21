@@ -36,6 +36,11 @@ class SsoCancelled implements Exception {}
 class SsoService {
   static bool _googleReady = false;
 
+  /// iOS: SDK Google (AppAuth) tự chèn một nonce NGẪU NHIÊN vào ID token nếu app không đưa nonce; app không biết giá trị đó
+  /// nên backend từ chối ("unauthorized"). Vì vậy app tự tạo nonce và gửi kèm. google_sign_in chỉ nhận nonce lúc
+  /// `initialize` (gọi một lần), nên dùng một nonce cho mỗi lần chạy app.
+  static final String _googleNonce = _randomNonce();
+
   /// App build có client ID Google cho nền tảng này chưa (máy chủ có bật hay không thì hỏi /v1/auth/providers).
   static bool get googleConfigured {
     if (kIsWeb) return false;
@@ -57,14 +62,18 @@ class SsoService {
   static Future<SsoCredential> google() async {
     final g = GoogleSignIn.instance;
     if (!_googleReady) {
-      await g.initialize(clientId: Platform.isIOS ? _googleIosClientId : null, serverClientId: _googleServerClientId.isEmpty ? null : _googleServerClientId);
+      await g.initialize(
+        clientId: Platform.isIOS ? _googleIosClientId : null,
+        serverClientId: _googleServerClientId.isEmpty ? null : _googleServerClientId,
+        nonce: Platform.isIOS ? _googleNonce : null,
+      );
       _googleReady = true;
     }
     try {
       final account = await g.authenticate();
       final token = account.authentication.idToken;
       if (token == null || token.isEmpty) throw Exception('Google không trả về ID token');
-      return SsoCredential('google', token, name: account.displayName);
+      return SsoCredential('google', token, nonce: Platform.isIOS ? _googleNonce : null, name: account.displayName);
     } on GoogleSignInException catch (e) {
       if (e.code == GoogleSignInExceptionCode.canceled) throw SsoCancelled();
       rethrow;

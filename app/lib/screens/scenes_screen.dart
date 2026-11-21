@@ -78,7 +78,7 @@ class _ScenesScreenState extends State<ScenesScreen> {
       appBar: AppBar(
         title: const Text('Ngữ cảnh'),
         actions: [
-          if (home.isAdmin) HeaderAction(icon: Icons.add_rounded, tooltip: 'Tạo ngữ cảnh', onPressed: () => _edit(null)),
+          if (home.isAdmin) IconButton(icon: const Icon(Icons.add_rounded), tooltip: 'Tạo ngữ cảnh', onPressed: () => _edit(null)),
           const SizedBox(width: 8),
         ],
       ),

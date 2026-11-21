@@ -32,7 +32,7 @@ class CamerasScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Camera'),
         actions: [
-          if (admin) HeaderAction(icon: Icons.add_rounded, tooltip: 'Thêm camera', onPressed: () => showAddCameraSheet(context)),
+          if (admin) IconButton(icon: const Icon(Icons.add_rounded), tooltip: 'Thêm camera', onPressed: () => showAddCameraSheet(context)),
           const InfoTip(
             'Camera',
             'Camera Wi‑Fi chạy qua addon camera (go2rtc) đặt trong nhà. Xem trực tiếp đi thẳng từ điện thoại tới addon; mạng nào không nối thẳng được thì app chuyển sang ảnh chụp làm mới mỗi giây.\n\nCamera có ONVIF thì quay PTZ và báo chuyển động được. Mật khẩu camera chỉ lưu ở addon trong nhà, không lưu trên máy chủ.',

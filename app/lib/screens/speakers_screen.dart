@@ -132,11 +132,10 @@ class _SpeakersScreenState extends State<SpeakersScreen> {
       appBar: AppBar(
         title: const Text('Loa thông báo'),
         actions: [
-          HeaderAction(
-            icon: Icons.add_rounded,
+          IconButton(
             tooltip: 'Thêm loa',
             onPressed: _scanning ? null : _add,
-            child: _scanning ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : null,
+            icon: _scanning ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.add_rounded),
           ),
           const InfoTip(
             'Loa thông báo',

@@ -230,13 +230,19 @@ impl Sso {
         v.set_issuer(p.issuers());
         v.leeway = 60;
         v.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
-        let c = decode::<Claims>(id_token, &key, &v).map_err(|_| ApiError::Unauthorized)?.claims;
+        // Ghi lý do từ chối (không ghi token) để gỡ lỗi đăng nhập: sai aud/iss, hết hạn, nonce…
+        let reject = |why: &str| {
+            tracing::warn!(provider = p.as_str(), reason = why, "sso: từ chối ID token");
+            ApiError::Unauthorized
+        };
+        let c = decode::<Claims>(id_token, &key, &v).map_err(|e| reject(&format!("{:?}", e.kind())))?.claims;
         // Token có nonce thì bắt buộc app gửi đúng nonce gốc (chống dùng lại token bị lộ).
+        // (SDK Google trên iOS tự chèn nonce ngẫu nhiên nếu app không đưa → app phải tự tạo và gửi, xem sso_service.dart.)
         if let Some(n) = c.nonce.as_deref() {
-            let raw = nonce.ok_or(ApiError::Unauthorized)?;
+            let raw = nonce.ok_or_else(|| reject("token has nonce but app sent none"))?;
             let hashed = hex::encode(Sha256::digest(raw.as_bytes()));
             if !(crate::oauth::ct_eq(n, &hashed) || crate::oauth::ct_eq(n, raw)) {
-                return Err(ApiError::Unauthorized);
+                return Err(reject("nonce mismatch"));
             }
         }
         if c.sub.is_empty() || c.sub.len() > 255 {
@@ -462,6 +468,18 @@ mod tests {
         assert_eq!(id.sub, "111");
         assert_eq!(id.email.as_deref(), Some("a@example.com"));
         assert!(id.email_verified);
+    }
+
+    /// iOS: SDK Google luôn có nonce trong token (tự sinh nếu app không đưa) → app phải gửi đúng nonce gốc.
+    #[tokio::test]
+    async fn google_ios_nonce() {
+        let mut c = google_claims();
+        c["nonce"] = json!("raw-nonce-123");
+        let t = token(c, "k1");
+        let s = sso();
+        assert!(matches!(s.verify(Provider::Google, &t, None).await, Err(ApiError::Unauthorized)));
+        assert!(matches!(s.verify(Provider::Google, &t, Some("other")).await, Err(ApiError::Unauthorized)));
+        assert_eq!(s.verify(Provider::Google, &t, Some("raw-nonce-123")).await.unwrap().sub, "111");
     }
 
     #[tokio::test]

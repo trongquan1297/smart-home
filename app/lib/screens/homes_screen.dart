@@ -121,8 +121,8 @@ class HomesScreen extends StatelessWidget {
                     }
                   },
                 ),
-                HeaderAction(
-                  icon: Icons.add_home_rounded,
+                IconButton(
+                  icon: const Icon(Icons.add_home_rounded),
                   tooltip: 'Căn hộ mới',
                   onPressed: () async {
                     final n = await _ask(context, 'Căn hộ mới', 'Tên căn hộ');
