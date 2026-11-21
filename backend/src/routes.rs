@@ -29,10 +29,13 @@ pub fn router(st: AppState) -> Router {
         .route("/google/fulfillment", post(crate::google::fulfillment))
         .route("/v1/auth/register", post(register))
         .route("/v1/auth/login", post(login))
+        .route("/v1/auth/sso", post(sso_login))
+        .route("/v1/auth/providers", get(auth_providers))
         .route("/v1/auth/refresh", post(refresh))
         .route("/v1/auth/logout", post(logout))
         .route("/v1/auth/logout-all", post(logout_all))
-        .route("/v1/me", get(me))
+        .route("/v1/me", get(me).delete(crate::account::delete))
+        .route("/v1/me/deletion", get(crate::account::preview))
         // tenant / home
         .route("/v1/tenants", post(create_tenant))
         .route("/v1/tenants/:tid/homes", post(create_home))
@@ -191,6 +194,53 @@ async fn login(
     st.limiter.clear(&acct_key);
     let tokens = auth::start_session(&st, id).await?;
     Ok(Json(tokens.into_json(json!({ "id": id, "email": email, "name": name }))))
+}
+
+#[derive(Deserialize)]
+struct SsoReq {
+    provider: String,
+    id_token: String,
+    /// Nonce gốc app đã tạo (bắt buộc nếu ID token có claim `nonce`, luôn có với Apple).
+    nonce: Option<String>,
+    /// Tên hiển thị (Apple chỉ cho app biết tên ở lần đăng nhập đầu tiên); chỉ dùng khi tạo tài khoản mới.
+    name: Option<String>,
+    /// Apple: authorizationCode (dùng một lần) để backend lấy refresh token, phục vụ thu hồi khi xoá tài khoản.
+    authorization_code: Option<String>,
+}
+
+/// Đăng nhập bằng ID token của Google/Apple (xem sso.rs). Dùng chung giới hạn sai theo IP với đăng nhập mật khẩu.
+async fn sso_login(
+    State(st): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Json(b): Json<SsoReq>,
+) -> ApiResult<Json<Value>> {
+    let ip = peer_ip(&st, &headers, peer);
+    let ip_key = format!("login-ip:{ip}");
+    st.limiter.check(&ip_key, LOGIN_FAIL_PER_IP, LOGIN_WINDOW)?;
+    let p = crate::sso::Provider::parse(&b.provider).ok_or_else(|| ApiError::BadRequest("provider must be google or apple".into()))?;
+    let id = match st.sso.verify(p, b.id_token.trim(), b.nonce.as_deref()).await {
+        Ok(id) => id,
+        Err(e) => {
+            st.limiter.record(&ip_key);
+            tracing::warn!(%ip, provider = p.as_str(), "sso login failed");
+            return Err(e);
+        }
+    };
+    let uid = crate::sso::resolve_user(&st, &id, b.name.as_deref()).await?;
+    if let Some(code) = b.authorization_code.as_deref().map(str::trim).filter(|c| p == crate::sso::Provider::Apple && !c.is_empty() && c.len() < 2048) {
+        let (st2, id2, code) = (st.clone(), id.clone(), code.to_string());
+        tokio::spawn(async move { crate::sso::store_apple_code(&st2, &id2, &code).await });
+    }
+    let tokens = auth::start_session(&st, uid).await?;
+    let (email, name): (String, String) = sqlx::query_as("SELECT email, name FROM users WHERE id = $1").bind(uid).fetch_one(&st.db).await?;
+    Ok(Json(tokens.into_json(json!({ "id": uid, "email": email, "name": name }))))
+}
+
+/// Nhà cung cấp đăng nhập đang bật (app ẩn nút của nhà cung cấp chưa cấu hình).
+async fn auth_providers(State(st): State<AppState>) -> Json<Value> {
+    use crate::sso::Provider;
+    Json(json!({ "password": true, "google": st.sso.enabled(Provider::Google), "apple": st.sso.enabled(Provider::Apple) }))
 }
 
 #[derive(Deserialize)]

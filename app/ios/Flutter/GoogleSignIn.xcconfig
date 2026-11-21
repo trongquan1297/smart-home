@@ -1,0 +1,4 @@
+// Đăng nhập bằng Google trên iOS: URL scheme = client ID iOS đảo ngược (Google Cloud Console → Credentials → OAuth client iOS,
+// bundle ID com.newmoon22.msmart), vd com.googleusercontent.apps.1234567890-abcdef. Không phải bí mật.
+// Build kèm: --dart-define=GOOGLE_IOS_CLIENT_ID=<client iOS> --dart-define=GOOGLE_SERVER_CLIENT_ID=<client Web>
+GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.511774696963-n5cu5mo2ej2j8m0e1vnha7fdd6c6d4i4

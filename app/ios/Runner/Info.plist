@@ -2,14 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>MSmart dùng vị trí hiện tại để đặt vị trí căn hộ của bạn.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>MSmart theo dõi việc bạn vào/ra khỏi căn hộ (kể cả khi app đóng) để tự chạy ngữ cảnh "rời nhà". Chỉ trạng thái trong/ngoài được gửi lên máy chủ, không gửi toạ độ.</string>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>remote-notification</string>
-	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
@@ -30,10 +22,38 @@
 	<string>$(FLUTTER_BUILD_NAME)</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>google-sign-in</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(GOOGLE_REVERSED_CLIENT_ID)</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>MSmart chỉ hiển thị hình ảnh từ camera an ninh trong nhà bạn và không dùng camera của điện thoại.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>MSmart theo dõi việc bạn vào/ra khỏi căn hộ (kể cả khi app đóng) để tự chạy ngữ cảnh "rời nhà". Chỉ trạng thái trong/ngoài được gửi lên máy chủ, không gửi toạ độ.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>MSmart dùng vị trí hiện tại để đặt vị trí căn hộ của bạn.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>MSmart không ghi âm. Thư viện xem camera trực tiếp có hỗ trợ micro, nhưng app không dùng micro của điện thoại.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -57,6 +77,10 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
@@ -74,10 +98,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-	</dict>
 </dict>
 </plist>

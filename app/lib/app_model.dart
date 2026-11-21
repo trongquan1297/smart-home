@@ -9,6 +9,7 @@ import 'api.dart';
 import 'geofence_service.dart';
 import 'notifier.dart';
 import 'push_service.dart';
+import 'sso_service.dart';
 import 'models.dart';
 
 /// Tiến trình ghép một thiết bị Zigbee: vào mạng → interview xong (đã thêm) / lỗi / rời mạng.
@@ -175,6 +176,13 @@ class AppModel extends ChangeNotifier {
 
   Future<void> login(String email, String password) => _auth(api.login(email, password));
   Future<void> register(String email, String password, String name) => _auth(api.register(email, password, name));
+  Future<void> ssoLogin(SsoCredential c) => _auth(api.ssoLogin(c.provider, c.idToken, nonce: c.nonce, name: c.name, authorizationCode: c.authorizationCode));
+
+  /// Xoá tài khoản trên máy chủ rồi đăng xuất cục bộ (phiên phía máy chủ đã bị xoá theo tài khoản).
+  Future<void> deleteAccount() async {
+    await api.deleteAccount();
+    await logout(remote: false);
+  }
 
   Future<void> logout({bool remote = true}) async {
     _closeWs();
@@ -183,6 +191,7 @@ class AppModel extends ChangeNotifier {
     await GeofenceService.disableAll(); // máy này không báo vị trí cho tài khoản khác
     if (remote) await PushService.unregister(api);
     if (remote) await api.logoutRemote(); // thu hồi phiên phía máy chủ (tối đa 5 giây, lỗi mạng bỏ qua)
+    await SsoService.signOut(); // lần sau bấm "Đăng nhập bằng Google" được chọn lại tài khoản
     api.token = null;
     api.refreshToken = null;
     notice = null;

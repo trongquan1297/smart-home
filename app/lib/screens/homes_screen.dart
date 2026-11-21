@@ -37,6 +37,30 @@ class HomesScreen extends StatelessWidget {
     }
   }
 
+  /// Xoá tài khoản (App Store yêu cầu có ngay trong app): báo trước căn hộ nào bị xoá theo, bắt gõ "XOÁ" để xác nhận.
+  Future<void> _deleteAccount(BuildContext c, AppModel m) async {
+    final messenger = ScaffoldMessenger.of(c);
+    List<dynamic> homes;
+    try {
+      homes = (await m.api.accountDeletionPreview())['homes'] as List<dynamic>? ?? [];
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+      return;
+    }
+    if (!c.mounted) return;
+    final ok = await showDialog<bool>(
+      context: c,
+      builder: (_) => _DeleteAccountDialog(homes: homes),
+    );
+    if (ok != true) return;
+    try {
+      await m.deleteAccount();
+      messenger.showSnackBar(const SnackBar(content: Text('Đã xoá tài khoản.')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
   /// Khách thuê nhập mã: báo rõ đã nhận mã và khi nào được vào (đồng hồ đếm ngược hiện ở thẻ căn hộ).
   Future<void> _afterAccept(BuildContext c, Map<String, dynamic> r) async {
     if (r['role'] != 'renter' || r['valid_from'] == null) return;
@@ -105,7 +129,35 @@ class HomesScreen extends StatelessWidget {
                     if (n != null && n.isNotEmpty && context.mounted) await _guard(context, () => m.createFirstHome(n));
                   },
                 ),
-                IconButton(icon: const Icon(Icons.logout_rounded), tooltip: 'Đăng xuất', onPressed: m.logout),
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.account_circle_rounded),
+                  tooltip: 'Tài khoản',
+                  onSelected: (v) {
+                    if (v == 'logout') m.logout();
+                    if (v == 'delete') _deleteAccount(context, m);
+                  },
+                  itemBuilder: (_) => [
+                    PopupMenuItem<String>(
+                      enabled: false,
+                      child: Text(
+                        (m.me?['user']?['email'] ?? m.me?['email'] ?? '').toString(),
+                        style: TextStyle(color: cs.onSurfaceVariant),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'logout',
+                      child: ListTile(leading: Icon(Icons.logout_rounded), title: Text('Đăng xuất')),
+                    ),
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: ListTile(
+                        leading: Icon(Icons.delete_forever_rounded, color: cs.error),
+                        title: Text('Xoá tài khoản', style: TextStyle(color: cs.error)),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
             if (m.notice != null)
@@ -322,6 +374,71 @@ class _CheckinCountdownState extends State<_CheckinCountdown> {
       style: Theme.of(
         context,
       ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w800, color: cs.primary, fontFeatures: const [FontFeature.tabularFigures()]),
+    );
+  }
+}
+
+/// Hộp xác nhận xoá tài khoản; tự giữ ô nhập (giải phóng khi hộp thoại thật sự rời cây widget, sau hiệu ứng đóng).
+class _DeleteAccountDialog extends StatefulWidget {
+  final List<dynamic> homes;
+  const _DeleteAccountDialog({required this.homes});
+  @override
+  State<_DeleteAccountDialog> createState() => _DeleteAccountDialogState();
+}
+
+class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
+  final _ctl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  bool get _confirmed => const ['XOÁ', 'XÓA', 'XOA'].contains(_ctl.text.trim().toUpperCase());
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return AlertDialog(
+      icon: Icon(Icons.warning_amber_rounded, color: cs.error),
+      title: const Text('Xoá tài khoản vĩnh viễn?'),
+      content: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Tài khoản, phiên đăng nhập, liên kết Google Home và Đăng nhập bằng Apple/Google của bạn sẽ bị xoá. Không thể hoàn tác.'),
+            if (widget.homes.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Các căn hộ bạn là người quản lý duy nhất cũng bị xoá cùng toàn bộ thiết bị, ngữ cảnh và bộ điều khiển:',
+                style: TextStyle(color: cs.error, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 6),
+              for (final h in widget.homes)
+                Text('• ${h['name']}${(h['other_members'] ?? 0) > 0 ? ' (${h['other_members']} thành viên khác sẽ mất quyền)' : ''}'),
+            ],
+            const SizedBox(height: 14),
+            const Text('Gõ XOÁ để xác nhận:'),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _ctl,
+              autofocus: true,
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(hintText: 'XOÁ'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Huỷ')),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: cs.error, foregroundColor: cs.onError),
+          onPressed: _confirmed ? () => Navigator.pop(context, true) : null,
+          child: const Text('Xoá tài khoản'),
+        ),
+      ],
     );
   }
 }

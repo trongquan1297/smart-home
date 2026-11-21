@@ -101,7 +101,16 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Ok(Event::Incoming(Packet::Publish(p))) => {
                         if let Some(msg) = to_cloud_msg(&base, &p.topic, &p.payload, &cache) {
+                            let devices = msg["type"] == "devices";
                             let _ = up_tx.try_send(msg.to_string()); // đầy/offline → bỏ, cache sẽ phát lại
+                            if devices {
+                                // Thiết bị vừa ghép: availability (retained) của Z2M thường tới TRƯỚC bridge/devices, lúc cloud chưa
+                                // có bản ghi thiết bị → bị bỏ qua, và Z2M không gửi lại khi trạng thái không đổi → app báo offline mãi.
+                                // Gửi lại availability đã biết ngay sau danh sách (cloud xử lý tuần tự nên bản ghi đã được tạo).
+                                for m in availability_msgs(&cache) {
+                                    let _ = up_tx.try_send(m);
+                                }
+                            }
                         }
                     }
                     Ok(_) => {}
@@ -192,6 +201,12 @@ fn pair_event_msg(ev: &Value) -> Option<Value> {
     }))
 }
 
+/// Kết nối/gửi lên cloud và phát hiện kết nối chết (xem run_session).
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const SEND_TIMEOUT: Duration = Duration::from_secs(15);
+const PING_EVERY: Duration = Duration::from_secs(20);
+const IDLE_TIMEOUT: Duration = Duration::from_secs(50);
+
 /// Z2M chấp nhận tối đa 254 giây cho một lần mở ghép nối.
 const MAX_PERMIT_SECONDS: u64 = 254;
 
@@ -207,10 +222,14 @@ fn replay(cache: &Mutex<Cache>) -> Vec<String> {
     for (n, s) in &c.states {
         out.push(json!({"type": "state", "friendly_name": n, "payload": s}).to_string());
     }
-    for (n, o) in &c.online {
-        out.push(json!({"type": "availability", "friendly_name": n, "online": o}).to_string());
-    }
+    drop(c);
+    out.extend(availability_msgs(cache));
     out
+}
+
+fn availability_msgs(cache: &Mutex<Cache>) -> Vec<String> {
+    let c = cache.lock().unwrap();
+    c.online.iter().map(|(n, o)| json!({"type": "availability", "friendly_name": n, "online": o}).to_string()).collect()
 }
 
 /// Tên thiết bị không được chứa ký tự wildcard/ngăn cấp MQTT (chống topic injection từ cloud).
@@ -237,7 +256,7 @@ async fn cloud_loop(url: String, token: String, base: String, mqtt: AsyncClient,
 async fn run_session(url: &str, token: &str, base: &str, mqtt: &AsyncClient, cache: &Mutex<Cache>, up_rx: &mut mpsc::Receiver<String>, reply_tx: &mpsc::Sender<String>, matter_cfg: &matter::Config) -> anyhow::Result<()> {
     let mut req = url.into_client_request()?;
     req.headers_mut().insert("Authorization", format!("Bearer {token}").parse()?);
-    let (ws, _) = connect_async(req).await?;
+    let (ws, _) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(req)).await.map_err(|_| anyhow::anyhow!("connect timeout"))??;
     info!("cloud connected");
     let (mut sink, mut stream) = ws.split();
 
@@ -251,19 +270,36 @@ async fn run_session(url: &str, token: &str, base: &str, mqtt: &AsyncClient, cac
     if cast::get().is_some_and(|c| c.mdns_ok()) {
         caps.push("cast");
     }
-    sink.send(Message::Text(json!({"type": "hello", "caps": caps}).to_string())).await?;
+    // Mọi lần gửi đều có hạn: bộ đệm TCP đầy (mạng chết) không được treo vòng lặp.
+    macro_rules! send {
+        ($m:expr) => {
+            tokio::time::timeout(SEND_TIMEOUT, sink.send($m)).await.map_err(|_| anyhow::anyhow!("send timeout"))??
+        };
+    }
+    send!(Message::Text(json!({"type": "hello", "caps": caps}).to_string()));
     for m in replay(cache) {
-        sink.send(Message::Text(m)).await?;
+        send!(Message::Text(m));
     }
 
-    let mut ping = tokio::time::interval(Duration::from_secs(30));
+    // Phát hiện kết nối "nửa sống" (vd Pi đổi Wi‑Fi → dây, mạng rớt): gửi vẫn "thành công" vào bộ đệm TCP nên không có lỗi,
+    // TCP có thể mất >15 phút mới bỏ. Gửi WebSocket Ping (backend tự trả Pong) và đóng phiên nếu quá IDLE_TIMEOUT không nhận gì.
+    let mut ping = tokio::time::interval(PING_EVERY);
+    let mut last_rx = std::time::Instant::now();
     loop {
         tokio::select! {
-            Some(m) = up_rx.recv() => sink.send(Message::Text(m)).await?,
-            _ = ping.tick() => sink.send(Message::Text(json!({"type": "ping"}).to_string())).await?,
+            Some(m) = up_rx.recv() => send!(Message::Text(m)),
+            _ = ping.tick() => {
+                if last_rx.elapsed() > IDLE_TIMEOUT {
+                    anyhow::bail!("no data from cloud for {}s, reconnecting", last_rx.elapsed().as_secs());
+                }
+                send!(Message::Text(json!({"type": "ping"}).to_string()));
+                send!(Message::Ping(Vec::new()));
+            }
             inbound = stream.next() => {
                 let Some(inbound) = inbound else { return Ok(()) };
-                match inbound? {
+                let inbound = inbound?;
+                last_rx = std::time::Instant::now();
+                match inbound {
                     Message::Text(t) => handle_cmd(&t, base, mqtt, reply_tx, matter_cfg).await,
                     Message::Close(_) => return Ok(()),
                     _ => {}

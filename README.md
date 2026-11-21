@@ -191,6 +191,31 @@ Mức hệ điều hành (chạy một lần): `sudo ./edge/pi-reduce-writes.sh`
 
 `GATEWAY_TOKEN` lấy trong app: vào căn hộ → biểu tượng router (**Bộ điều khiển trung tâm**) → **Thêm** → app hiện `CLOUD_WS_URL` và `GATEWAY_TOKEN` (chỉ hiện một lần; chỉ admin/owner). Hoặc gọi `POST /v1/homes/:home_id/gateways`; script bootstrap làm sẵn cho dev.
 
+## Đăng nhập bằng Google / Apple
+
+Song song với email + mật khẩu. App lấy **ID token** từ Google/Apple, gửi `POST /v1/auth/sso {provider, id_token, nonce?, name?}`; backend tự kiểm tra chữ ký (JWKS của Google/Apple), `iss`, `aud` ∈ client ID đã cấu hình, hạn dùng, `nonce`, rồi cấp phiên MSmart như đăng nhập thường (`backend/src/sso.rs`). `GET /v1/auth/providers` cho app biết nút nào bật.
+
+Gắn tài khoản:
+1. Đã từng đăng nhập bằng cùng Google/Apple (`sub`) → đúng tài khoản đó.
+2. Email **đã được Google/Apple xác minh** trùng tài khoản email/mật khẩu có sẵn → gộp vào tài khoản đó, **xoá mật khẩu cũ và đăng xuất mọi phiên cũ** (đăng ký bằng email không xác minh email, nên mật khẩu cũ có thể do người khác đặt). Từ đó tài khoản chỉ đăng nhập bằng Google/Apple.
+3. Còn lại → tài khoản mới không có mật khẩu. Apple ẩn email thì dùng địa chỉ chuyển tiếp `@privaterelay.appleid.com`; không có email/chưa xác minh/email đã thuộc tài khoản khác thì email nội bộ `…@users.msmart.invalid`.
+
+Trang liên kết Google Home (`/oauth/authorize`) cũng có nút Google/Apple (Google Identity Services, Sign in with Apple JS) để tài khoản không có mật khẩu vẫn liên kết được; ID token phải mang đúng nonce của trang (nằm trong chữ ký form).
+
+Cấu hình (bạn tự tạo, không phải bí mật):
+
+| Ở đâu | Tạo gì | Đặt vào |
+|---|---|---|
+| Google Cloud Console (dự án `msmart-ed122`) → Credentials | OAuth client **iOS** (bundle `com.newmoon22.msmart`) | app: `--dart-define=GOOGLE_IOS_CLIENT_ID=…`; `app/ios/Flutter/GoogleSignIn.xcconfig`: `GOOGLE_REVERSED_CLIENT_ID` (client iOS đảo ngược); backend: `GOOGLE_SIGNIN_CLIENT_IDS` |
+| | OAuth client **Web**, Authorized JavaScript origins: `https://msmart-api.newmoon.cloud` | app: `--dart-define=GOOGLE_SERVER_CLIENT_ID=…` (bắt buộc trên Android); backend: `GOOGLE_SIGNIN_WEB_CLIENT_ID` |
+| | OAuth client **Android** (package `com.newmoon22.msmart` + SHA‑1 khoá ký) | chỉ cần tồn tại, không đặt vào đâu |
+| Apple Developer → Identifiers | Bật **Sign in with Apple** cho App ID `com.newmoon22.msmart` | backend: `APPLE_SIGNIN_CLIENT_IDS=com.newmoon22.msmart` (app đã có entitlement) |
+| | **Services ID** (vd `com.newmoon22.msmart.web`), domain `msmart-api.newmoon.cloud`, return URL `https://msmart-api.newmoon.cloud/oauth/authorize` | backend: `APPLE_SIGNIN_WEB_SERVICE_ID` |
+
+**Xoá tài khoản** (App Store Guideline 5.1.1(v)): app → biểu tượng tài khoản ở màn danh sách căn hộ → *Xoá tài khoản*. `GET /v1/me/deletion` cho biết căn hộ nào bị xoá theo (tenant mà người dùng là quản lý duy nhất: xoá cả căn hộ, thiết bị, gateway); `DELETE /v1/me {"confirm":"DELETE"}` xoá, rồi thu hồi refresh token Sign in with Apple (backend lấy token này lúc đăng nhập Apple từ `authorizationCode`, cần `APPLE_TEAM_ID`, `APPLE_SIGNIN_KEY_ID`, `APPLE_SIGNIN_KEY_FILE`) và xoá người dùng khỏi Google HomeGraph.
+
+App chỉ hiện nút Apple trên iOS. App cần Flutter ≥ 3.47 (google_sign_in_ios 6.4 dùng GoogleSignIn 10, tương thích Firebase 13).
+
 ## Google Home cloud-to-cloud: máy chủ OAuth 2.0 (liên kết tài khoản)
 
 Backend có sẵn máy chủ OAuth 2.0 (authorization code flow) để người dùng liên kết tài khoản MSmart trong ứng dụng Google Home, theo [yêu cầu của Google](https://developers.home.google.com/cloud-to-cloud/project/authorization). Gồm phần xác thực (OAuth) và fulfillment (`POST /google/fulfillment`).

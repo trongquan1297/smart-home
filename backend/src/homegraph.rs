@@ -54,6 +54,23 @@ impl HomeGraph {
     }
 }
 
+/// Người dùng xoá tài khoản MSmart: xoá họ khỏi HomeGraph (Google gỡ toàn bộ thiết bị MSmart khỏi Google Home của họ).
+pub async fn delete_agent(st: &AppState, user: Uuid) {
+    let Some(hg) = st.homegraph.as_ref() else { return };
+    let token = match hg.sa.access_token().await {
+        Ok(t) => t,
+        Err(e) => return tracing::warn!(%user, "homegraph delete agent: {e:#}"),
+    };
+    let url = format!("{}/v1/agentUsers/{}?requestId={}", hg.base, user, Uuid::new_v4());
+    match hg.sa.http.delete(url).bearer_auth(token).send().await {
+        Ok(r) if r.status().is_success() || r.status().as_u16() == 404 => tracing::info!(%user, "homegraph: đã xoá agent user"),
+        Ok(r) => tracing::warn!(%user, status = %r.status(), "homegraph delete agent"),
+        Err(e) => tracing::warn!(%user, "homegraph delete agent: {e}"),
+    }
+    hg.sync_fp.remove(&user);
+    hg.last.retain(|(u, _), _| *u != user);
+}
+
 /// Người dùng đang liên kết Google và có quyền thành viên trở lên với căn hộ.
 async fn linked_users(st: &AppState, home: Uuid) -> Vec<Uuid> {
     let users: Vec<Uuid> = sqlx::query_scalar(

@@ -254,7 +254,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   if (m.error != null) _ErrorBanner(message: m.error!, onRetry: m.reload),
                   if (home.isRenter && home.accessUntil != null) _RenterBanner(until: home.accessUntil!),
                   if (m.needsLocationPermission) _LocationBanner(onTap: m.enableLocationTracking),
-                  if (home.canRunScenes && m.activeScene != null && m.activeScene!.alertDevices.isNotEmpty) _ModeBanner(scene: m.activeScene!, onOff: m.disarm),
                   _SummaryCard(
                     gatewayOnline: m.gatewayOnline,
                     online: onlineCount,
@@ -263,6 +262,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     scene: home.canRunScenes ? m.activeScene : null,
                     showScene: home.canRunScenes,
                     onPickScene: () => _pickScene(context),
+                    onDisarm: m.disarm,
                   ),
                   if (m.cameras.isNotEmpty) _CameraStrip(cameras: m.cameras, onAll: () => _open(context, const CamerasScreen())),
                   if (!m.gatewayOnline && m.devices.isEmpty)
@@ -371,32 +371,6 @@ class _Banner extends StatelessWidget {
 }
 
 /// Chế độ cảnh báo đang bật (ngữ cảnh chạy gần nhất có chọn cảm biến): nhắc người dùng và cho tắt nhanh.
-class _ModeBanner extends StatelessWidget {
-  final Scene scene;
-  final Future<void> Function() onOff;
-  const _ModeBanner({required this.scene, required this.onOff});
-
-  @override
-  Widget build(BuildContext context) => _Banner(
-    icon: scene.kind.icon,
-    colors: sceneColors(scene.kind.id),
-    title: '${scene.name} · ${scene.alertDevices.length} cảm biến',
-    info:
-        'Ngữ cảnh "${scene.name}" đang bật: mỗi khi ${scene.alertDevices.length} cảm biến đã chọn phát hiện có người hoặc cửa mở, thành viên nhận thông báo. Bấm Tắt để ngừng canh.',
-    action: FilledButton.tonal(
-      onPressed: () async {
-        final msg = ScaffoldMessenger.of(context);
-        try {
-          await onOff();
-        } catch (e) {
-          msg.showSnackBar(SnackBar(content: Text(e.toString())));
-        }
-      },
-      child: const Text('Tắt'),
-    ),
-  );
-}
-
 /// Khách thuê: hiện thời gian còn lại, và tự thoát khi hết hạn (phòng khi mất kết nối WebSocket).
 class _RenterBanner extends StatefulWidget {
   final DateTime until;
@@ -542,6 +516,7 @@ class _SummaryCard extends StatelessWidget {
   final Scene? scene; // ngữ cảnh đang được kích hoạt
   final bool showScene;
   final VoidCallback onPickScene;
+  final Future<void> Function() onDisarm; // tắt ngữ cảnh đang bật (ngừng canh cảm biến)
   const _SummaryCard({
     required this.gatewayOnline,
     required this.online,
@@ -550,6 +525,7 @@ class _SummaryCard extends StatelessWidget {
     required this.scene,
     required this.showScene,
     required this.onPickScene,
+    required this.onDisarm,
   });
 
   @override
@@ -600,14 +576,28 @@ class _SummaryCard extends StatelessWidget {
         Icon(scene?.kind.icon ?? Icons.auto_awesome_rounded, color: Colors.white, size: 34),
         const SizedBox(width: 12),
         Expanded(
-          child: Text(
-            scene?.name ?? 'Chọn ngữ cảnh',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: tt.headlineSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.w800, letterSpacing: -.3),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                scene?.name ?? 'Chọn ngữ cảnh',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: tt.headlineSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.w800, letterSpacing: -.3),
+              ),
+              if (scene != null && scene!.alertDevices.isNotEmpty)
+                Text(
+                  'Đang canh ${scene!.alertDevices.length} cảm biến',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: tt.bodySmall?.copyWith(color: Colors.white.withValues(alpha: .9)),
+                ),
+            ],
           ),
         ),
-        const SizedBox(width: 8),
+        if (scene != null) _SceneSwitch(sceneName: scene!.name, onOff: onDisarm),
+        const SizedBox(width: 4),
         status,
       ],
     );
@@ -656,6 +646,45 @@ class _SummaryCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Công tắc gạt cạnh tên ngữ cảnh đang bật: gạt tắt = ngừng ngữ cảnh (và ngừng canh cảm biến của nó).
+class _SceneSwitch extends StatefulWidget {
+  final String sceneName;
+  final Future<void> Function() onOff;
+  const _SceneSwitch({required this.sceneName, required this.onOff});
+  @override
+  State<_SceneSwitch> createState() => _SceneSwitchState();
+}
+
+class _SceneSwitchState extends State<_SceneSwitch> {
+  bool _busy = false;
+
+  Future<void> _off() async {
+    final msg = ScaffoldMessenger.of(context);
+    setState(() => _busy = true);
+    try {
+      await widget.onOff();
+    } catch (e) {
+      msg.showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: 'Tắt ngữ cảnh ${widget.sceneName}',
+    child: Switch(
+      value: !_busy, // gạt xong hiện tắt ngay trong lúc chờ máy chủ
+      onChanged: _busy ? null : (v) => v ? null : _off(),
+      activeThumbColor: Colors.white,
+      activeTrackColor: Colors.white.withValues(alpha: .35),
+      inactiveThumbColor: Colors.white,
+      inactiveTrackColor: Colors.white.withValues(alpha: .15),
+      trackOutlineColor: WidgetStatePropertyAll(Colors.white.withValues(alpha: .5)),
+    ),
+  );
 }
 
 class _Stat extends StatelessWidget {

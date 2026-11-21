@@ -118,6 +118,13 @@ def make_vendor_catalog():
         "exposes": [switch_expose("state"), numeric("power", "W", 5), numeric("energy", "kWh"), numeric("voltage", "V"),
                     numeric("current", "A"), numeric("device_temperature", "°C", 1, None, None, diag)],
         "init": {"state": "OFF", "power": 0.0, "energy": 12.34, "voltage": 220.0, "current": 0.0, "device_temperature": 32}}
+    # Bóng đèn chỉnh độ sáng: expose kiểu `light` của Z2M (state + brightness 0..254) → backend xếp loại "light",
+    # Google nhận LIGHT + OnOff + Brightness mà không cần đặt loại tải trong app.
+    v["LED1623G12"] = {"vendor": "IKEA", "mfr": "IKEA of Sweden", "desc": "TRADFRI LED bulb E27 dimmable", "type": "Router",
+        "exposes": [{"type": "light", "features": [
+            {"type": "binary", "name": "state", "property": "state", "value_on": "ON", "value_off": "OFF", "value_toggle": "TOGGLE", "access": 7},
+            {"type": "numeric", "name": "brightness", "property": "brightness", "value_min": 0, "value_max": 254, "access": 7}]}],
+        "init": {"state": "OFF", "brightness": 254}}
     v["TS0012"] = {"vendor": "Tuya", "mfr": "_TZ3000_sim", "desc": "Smart light switch - 2 gang", "type": "Router",
         "exposes": [switch_expose("state_left"), switch_expose("state_right")],
         "init": {"state_left": "OFF", "state_right": "OFF"}}
@@ -240,6 +247,26 @@ def publish_info():
     })
 
 
+# Thiết bị đang giả lập mất kết nối (chỉ trong RAM: khởi động lại simulator thì tất cả online lại).
+OFFLINE = set()
+
+
+def avail(name):
+    return {"state": "offline" if name in OFFLINE else "online"}
+
+
+def set_availability(name, online):
+    """Giả lập thiết bị mất kết nối / có lại kết nối, như Zigbee2MQTT báo qua <name>/availability (retain)."""
+    with LOCK:
+        if name not in DEVICES:
+            raise KeyError("unknown device")
+        (OFFLINE.discard if online else OFFLINE.add)(name)
+        pub(f"{name}/availability", avail(name))
+        if online:
+            pub(name, DEVICES[name]["state"])  # Z2M thường gửi lại trạng thái khi thiết bị quay lại
+    print("availability", name, "online" if online else "offline", flush=True)
+
+
 def publish_all():
     pub("bridge/state", {"state": "online"})
     pub("bridge/devices", bridge_devices())
@@ -247,7 +274,7 @@ def publish_all():
     pub("bridge/extensions", [])
     publish_info()
     for name, d in DEVICES.items():
-        pub(f"{name}/availability", {"state": "online"})
+        pub(f"{name}/availability", avail(name))
         pub(name, d["state"])
 
 
@@ -257,6 +284,8 @@ def apply_set(name, cmd):
         d = DEVICES.get(name)
         if not d:
             raise KeyError("unknown device")
+        if name in OFFLINE:  # thiết bị mất kết nối không nhận lệnh, trạng thái giữ nguyên
+            raise ValueError("device offline")
         st = d["state"]
         if "position" in st:  # rèm: state OPEN/CLOSE/STOP hoặc position 0..100 (tức thời, không mô phỏng chuyển động)
             if cmd.get("state") == "OPEN":
@@ -269,6 +298,10 @@ def apply_set(name, cmd):
         for k, v in cmd.items():
             if k.startswith("state") and k in st and st[k] in ("ON", "OFF"):
                 st[k] = ("OFF" if st[k] == "ON" else "ON") if v == "TOGGLE" else ("ON" if v == "ON" else "OFF")
+        if "brightness" in st and isinstance(cmd.get("brightness"), (int, float)):
+            st["brightness"] = max(0, min(254, int(cmd["brightness"])))
+            if "state" in st and "state" not in cmd:
+                st["state"] = "ON" if st["brightness"] > 0 else "OFF"  # như Z2M: đặt độ sáng là bật đèn
         if "power" in st:  # ổ cắm đo điện: công suất giả lập theo trạng thái
             on = st.get("state") == "ON"
             st["power"] = round(random.uniform(40, 90), 1) if on else 0.0
@@ -348,6 +381,8 @@ def trigger(name):
         d = DEVICES.get(name)
         if not d:
             raise KeyError("unknown device")
+        if name in OFFLINE:
+            raise ValueError("device offline")
         s = d["state"]
         if "contact" in s:
             s["contact"] = not s["contact"]
@@ -368,7 +403,8 @@ def snapshot():
             "pending": len(PENDING),
             "models": [{"model": m, "desc": c["desc"]} for m, c in CATALOG.items()],
             "devices": [{"name": n, "ieee": d["ieee"], "model": d["model"], "vendor": CATALOG[d["model"]].get("vendor", "VSmart"),
-                         "desc": CATALOG[d["model"]]["desc"], "type": CATALOG[d["model"]]["type"], "state": d["state"]}
+                         "desc": CATALOG[d["model"]]["desc"], "type": CATALOG[d["model"]]["type"], "state": d["state"],
+                          "online": n not in OFFLINE}
                         for n, d in sorted(DEVICES.items())],
         }
 
@@ -396,8 +432,8 @@ def on_message(c, _u, msg):
     elif len(parts) == 3 and parts[2] == "set" and isinstance(body, dict):
         try:
             apply_set(parts[1], body)
-        except KeyError:
-            pass
+        except (KeyError, ValueError) as e:
+            print("SET ignored", parts[1], e, flush=True)
 
 
 def sensor_loop():
@@ -408,6 +444,8 @@ def sensor_loop():
             continue
         with LOCK:
             for name, d in DEVICES.items():
+                if name in OFFLINE:
+                    continue
                 s = d["state"]
                 if "contact" in s:
                     s["contact"] = not s["contact"]
@@ -471,6 +509,8 @@ class Handler(BaseHTTPRequestHandler):
                 remove(b["name"])
             elif p == "/api/trigger":
                 trigger(b["name"])
+            elif p == "/api/availability":  # {"name": "...", "online": false}
+                set_availability(b["name"], bool(b["online"]))
             else:
                 return self._json(404, {"error": "not found"})
             self._json(200, {"ok": True})

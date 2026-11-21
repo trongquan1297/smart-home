@@ -135,6 +135,22 @@ class Api {
   Future<Map<String, dynamic>> login(String email, String password) async => await _send('POST', '/v1/auth/login', {'email': email, 'password': password});
   Future<Map<String, dynamic>> register(String email, String password, String name) async =>
       await _send('POST', '/v1/auth/register', {'email': email, 'password': password, 'name': name});
+
+  /// Đăng nhập bằng ID token của Google/Apple. [nonce]: chuỗi gốc (Apple nhận bản sha256 của nó).
+  Future<Map<String, dynamic>> ssoLogin(String provider, String idToken, {String? nonce, String? name, String? authorizationCode}) async => await _send(
+    'POST',
+    '/v1/auth/sso',
+    {'authorization_code': ?authorizationCode, 'provider': provider, 'id_token': idToken, 'nonce': ?nonce, if (name != null && name.isNotEmpty) 'name': name},
+  );
+
+  /// Căn hộ sẽ bị xoá theo nếu xoá tài khoản: {homes: [{id, name, other_members}]}.
+  Future<Map<String, dynamic>> accountDeletionPreview() async => await _send('GET', '/v1/me/deletion');
+
+  /// Xoá vĩnh viễn tài khoản đang đăng nhập (và các căn hộ mà người này là quản lý duy nhất).
+  Future<void> deleteAccount() => _send('DELETE', '/v1/me', {'confirm': 'DELETE'});
+
+  /// Nhà cung cấp đăng nhập đang bật phía máy chủ: {password, google, apple}.
+  Future<Map<String, dynamic>> authProviders() async => await _send('GET', '/v1/auth/providers');
   Future<Map<String, dynamic>> me() async => await _send('GET', '/v1/me');
 
   // ngữ cảnh (scene)

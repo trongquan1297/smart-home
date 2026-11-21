@@ -99,11 +99,11 @@ function render() {
   if (!sel.options.length) for (const m of S.models) sel.add(new Option(`${m.model} — ${m.desc}`, m.model));
   $('devices').innerHTML = S.devices.map(d => `
     <tr>
-      <td><b>${esc(d.name)}</b><div class="mut">${esc(d.desc)}</div></td>
+      <td><b>${esc(d.name)}</b>${d.online ? '' : ' <span class="mut">(offline)</span>'}<div class="mut">${esc(d.desc)}</div></td>
       <td>${esc(d.model)}<div class="mut">${esc(d.vendor)} · ${esc(d.type)}</div></td>
       <td class="mut">${esc(d.ieee)}</td>
       <td>${stateCell(d)}</td>
-      <td><button data-rename="${esc(d.name)}">Đổi tên</button> <button class="danger" data-remove="${esc(d.name)}">Xoá</button></td>
+      <td><button data-avail="${esc(d.name)}" data-online="${d.online ? 0 : 1}">${d.online ? 'Cho offline' : 'Cho online lại'}</button> <button data-rename="${esc(d.name)}">Đổi tên</button> <button class="danger" data-remove="${esc(d.name)}">Xoá</button></td>
     </tr>`).join('') || '<tr><td colspan="5" class="mut">Chưa có thiết bị</td></tr>';
 }
 
@@ -116,6 +116,7 @@ $('devices').onclick = (e) => {
   const d = t.dataset;
   if (d.set) act('/api/set', { name: d.set, payload: { [d.key]: 'TOGGLE' } });
   else if (d.trigger) act('/api/trigger', { name: d.trigger });
+  else if (d.avail) act('/api/availability', { name: d.avail, online: d.online === '1' });
   else if (d.rename) { const to = prompt('Tên mới cho ' + d.rename, d.rename); if (to && to !== d.rename) act('/api/rename', { from: d.rename, to }); }
   else if (d.remove && confirm('Xoá thiết bị ' + d.remove + '?')) act('/api/remove', { name: d.remove });
 };

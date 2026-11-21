@@ -1,4 +1,5 @@
 mod access;
+mod account;
 mod alerts;
 mod automation;
 mod camera;
@@ -17,6 +18,7 @@ mod rules;
 mod ratelimit;
 mod routes;
 mod speak;
+mod sso;
 
 use std::sync::Arc;
 
@@ -37,6 +39,10 @@ pub struct AppState {
     pub push: Arc<Option<push::Fcm>>,
     /// Google HomeGraph (Report State + Request Sync); None nếu chưa cấu hình GOOGLE_HOMEGRAPH_SA_FILE.
     pub homegraph: Arc<Option<homegraph::HomeGraph>>,
+    /// Đăng nhập bằng Google / Apple (xác minh ID token).
+    pub sso: Arc<sso::Sso>,
+    /// Sign in with Apple REST API (thu hồi token khi xoá tài khoản); None nếu chưa cấu hình khoá .p8.
+    pub apple: Arc<Option<sso::AppleApi>>,
     /// Lần báo gần nhất theo (thiết bị, loại sự kiện) để giới hạn tần suất cảnh báo.
     pub alert_seen: Arc<dashmap::DashMap<(uuid::Uuid, alerts::Event), std::time::Instant>>,
     /// Lệnh gần nhất do luật thiết bị phát theo (thiết bị, gang) → (trạng thái, lúc gửi): để phân biệt bản tin phản hồi, không nối chuỗi luật `link`.
@@ -47,6 +53,8 @@ pub struct AppState {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        // Giờ trong log theo múi giờ của container (TZ, mặc định Asia/Ho_Chi_Minh trong docker-compose), có kèm độ lệch (+07:00).
+        .with_timer(tracing_subscriber::fmt::time::ChronoLocal::rfc_3339())
         .init();
 
     let database_url = std::env::var("DATABASE_URL")?;
@@ -75,6 +83,8 @@ async fn main() -> anyhow::Result<()> {
         dummy_hash: Arc::new(auth::dummy_hash().await),
         push: Arc::new(push::Fcm::from_env()),
         homegraph: Arc::new(homegraph::HomeGraph::from_env()),
+        sso: Arc::new(sso::Sso::from_env()),
+        apple: Arc::new(sso::AppleApi::from_env()),
         alert_seen: Arc::new(dashmap::DashMap::new()),
         rule_cmds: Arc::new(dashmap::DashMap::new()),
     };

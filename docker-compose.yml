@@ -17,6 +17,7 @@ services:
       POSTGRES_USER: smart
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-smart_dev_pw}
       POSTGRES_DB: smart
+      TZ: ${TZ:-Asia/Ho_Chi_Minh} # giờ hệ thống của container; múi giờ phiên SQL đặt trong migration 0015
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
@@ -33,6 +34,7 @@ services:
       DATABASE_URL: postgres://smart:${POSTGRES_PASSWORD:-smart_dev_pw}@postgres:5432/smart
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-dev-only-change-me}
       BIND_ADDR: 0.0.0.0:8080
+      TZ: ${TZ:-Asia/Ho_Chi_Minh} # giờ trong log; lịch hẹn giờ dùng múi giờ riêng của từng căn hộ
       RUST_LOG: info,sqlx=warn
       # Giới hạn đăng nhập theo IP: khi backend CHỈ truy cập được qua Cloudflare Tunnel (không publish cổng 8080),
       # đặt TRUSTED_IP_HEADER=CF-Connecting-IP để lấy IP thật. Để trống nếu backend lộ trực tiếp (header giả mạo được).
@@ -48,6 +50,17 @@ services:
       # Report State + Request Sync qua Google HomeGraph: service account (JSON) của dự án Google Home, đặt trong ./secrets.
       GOOGLE_HOMEGRAPH_SA_FILE: ${GOOGLE_HOMEGRAPH_SA_FILE:-}
       HOMEGRAPH_URL: ${HOMEGRAPH_URL:-} # chỉ để thử với máy chủ giả lập
+      # Đăng nhập bằng Google / Apple: client ID (iOS, Android/web) và bundle ID / Services ID, phân tách bằng dấu phẩy. Để trống = tắt.
+      GOOGLE_SIGNIN_CLIENT_IDS: ${GOOGLE_SIGNIN_CLIENT_IDS:-}
+      GOOGLE_SIGNIN_WEB_CLIENT_ID: ${GOOGLE_SIGNIN_WEB_CLIENT_ID:-} # client web cho nút Google trên trang liên kết Google Home
+      APPLE_SIGNIN_CLIENT_IDS: ${APPLE_SIGNIN_CLIENT_IDS:-}
+      APPLE_SIGNIN_WEB_SERVICE_ID: ${APPLE_SIGNIN_WEB_SERVICE_ID:-} # Services ID cho nút Apple trên trang liên kết Google Home
+      # Khoá "Sign in with Apple" (.p8, trong ./secrets): thu hồi token Apple khi người dùng xoá tài khoản (App Store yêu cầu).
+      APPLE_TEAM_ID: ${APPLE_TEAM_ID:-}
+      APPLE_SIGNIN_KEY_ID: ${APPLE_SIGNIN_KEY_ID:-}
+      APPLE_SIGNIN_KEY_FILE: ${APPLE_SIGNIN_KEY_FILE:-}
+      GOOGLE_SIGNIN_JWKS_URL: ${GOOGLE_SIGNIN_JWKS_URL:-} # chỉ để thử với máy chủ giả lập
+      APPLE_SIGNIN_JWKS_URL: ${APPLE_SIGNIN_JWKS_URL:-}   # chỉ để thử với máy chủ giả lập
     volumes:
       - ./secrets:/run/secrets:ro
     depends_on:

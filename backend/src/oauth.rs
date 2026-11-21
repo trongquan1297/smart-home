@@ -80,7 +80,7 @@ fn client(id: &str) -> Option<&'static Client> {
 }
 
 /// So sánh thời gian hằng (hai chuỗi băm cùng độ dài).
-fn ct_eq(a: &str, b: &str) -> bool {
+pub(crate) fn ct_eq(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
@@ -123,26 +123,65 @@ fn check(q: &AuthorizeQuery) -> Result<&'static Client, &'static str> {
     Ok(c)
 }
 
-/// Chữ ký HMAC trên các tham số của Google + hạn: trang đăng nhập không thể bị sửa redirect_uri/client giữa GET và POST.
-fn sign(secret: &[u8], q: &AuthorizeQuery, exp: i64) -> String {
+/// Chữ ký HMAC trên các tham số của Google + hạn + nonce: trang đăng nhập không thể bị sửa redirect_uri/client giữa GET và POST,
+/// và ID token Google/Apple chỉ dùng được với đúng trang đã cấp nonce (token bị lộ ở nơi khác không đem vào đây được).
+fn sign(secret: &[u8], q: &AuthorizeQuery, exp: i64, nonce: &str) -> String {
     let mut m = Hmac::<Sha256>::new_from_slice(secret).expect("hmac key");
-    for part in ["oauth-form", &q.client_id, &q.redirect_uri, &q.state, &q.scope, &exp.to_string()] {
+    for part in ["oauth-form", &q.client_id, &q.redirect_uri, &q.state, &q.scope, &exp.to_string(), nonce] {
         m.update(part.as_bytes());
         m.update(&[0]);
     }
     hex::encode(m.finalize().into_bytes())
 }
 
+/// Script được phép trên trang: nonce của script nội tuyến + nút đăng nhập Google/Apple (khi bật).
+#[derive(Default)]
+struct Scripts {
+    nonce: Option<String>,
+    google: bool,
+    apple: bool,
+}
+
 fn page(status: StatusCode, body: String) -> Response {
+    page_with(status, body, &Scripts::default())
+}
+
+fn page_with(status: StatusCode, body: String, sc: &Scripts) -> Response {
     let mut r = (status, Html(body)).into_response();
     let h = r.headers_mut();
-    // Không cho nhúng trang đăng nhập vào khung (chống clickjacking), không lưu cache, không gửi Referer ra ngoài.
+    // Không cho nhúng trang đăng nhập vào khung (chống clickjacking), không lưu cache.
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
-    h.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://oauth-redirect.googleusercontent.com https://oauth-redirect-sandbox.googleusercontent.com; frame-ancestors 'none'"));
-    // `same-origin`, KHÔNG dùng `no-referrer`: với no-referrer trình duyệt gửi form POST kèm `Origin: null` (chuẩn Fetch),
-    // same_origin() từ chối → "phiên đã hết hạn". same-origin vẫn không gửi Referer (URL chứa state/code) sang Google.
-    h.insert("referrer-policy", HeaderValue::from_static("same-origin"));
+    // CSP theo hướng dẫn Google Identity Services (gsi/client, gsi/, gsi/style) và script Sign in with Apple JS.
+    let mut script = Vec::new();
+    let (mut frame, mut connect, mut style) = (Vec::new(), Vec::new(), vec!["'unsafe-inline'"]);
+    let nonce_src = sc.nonce.as_ref().map(|n| format!("'nonce-{n}'"));
+    if let Some(n) = &nonce_src {
+        script.push(n.as_str());
+    }
+    if sc.google {
+        script.push("https://accounts.google.com/gsi/client");
+        frame.push("https://accounts.google.com/gsi/");
+        connect.push("https://accounts.google.com/gsi/");
+        style.push("https://accounts.google.com/gsi/style");
+    }
+    if sc.apple {
+        script.push("https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/");
+    }
+    let mut csp = String::from("default-src 'none'; img-src 'self' data:");
+    for (k, v) in [("script-src", &script), ("frame-src", &frame), ("connect-src", &connect), ("style-src", &style)] {
+        if !v.is_empty() {
+            csp.push_str(&format!("; {k} {}", v.join(" ")));
+        }
+    }
+    csp.push_str("; form-action 'self' https://oauth-redirect.googleusercontent.com https://oauth-redirect-sandbox.googleusercontent.com; frame-ancestors 'none'");
+    if let Ok(v) = HeaderValue::from_str(&csp) {
+        h.insert("content-security-policy", v);
+    }
+    // KHÔNG dùng `no-referrer`: khi đó trình duyệt gửi form POST kèm `Origin: null` (chuẩn Fetch) và same_origin() từ chối
+    // ("phiên đã hết hạn"). strict-origin-when-cross-origin (Google Identity Services khuyến nghị) chỉ gửi origin ra ngoài,
+    // không gửi đường dẫn/query (chứa state) sang trang khác.
+    h.insert("referrer-policy", HeaderValue::from_static("strict-origin-when-cross-origin"));
     r
 }
 
@@ -152,6 +191,8 @@ const CSS: &str = "*{box-sizing:border-box}body{margin:0;font-family:-apple-syst
 h1{font-size:22px;margin:18px 0 6px}p{color:#475569;line-height:1.5;margin:0 0 14px;font-size:15px}
 label{display:block;font-size:13px;font-weight:600;color:#334155;margin:12px 0 6px}input{width:100%;font-size:16px;padding:13px 14px;border-radius:12px;border:1px solid #cbd5e1;background:#f8fafc}
 input:focus{outline:2px solid #0ea5e9;border-color:transparent}button{width:100%;margin-top:18px;padding:14px;border:0;border-radius:14px;background:#0ea5e9;color:#fff;font-size:16px;font-weight:700}
+.or{display:flex;align-items:center;gap:10px;color:#94a3b8;font-size:13px;margin:18px 0 12px}.or:before,.or:after{content:'';flex:1;height:1px;background:#e2e8f0}
+.sso{display:flex;flex-direction:column;align-items:center;gap:10px}.apple{margin-top:0;background:#000;display:flex;align-items:center;justify-content:center;gap:8px}
 .err{background:#fee2e2;color:#991b1b;border-radius:12px;padding:10px 12px;font-size:14px;margin-top:12px}.note{font-size:13px;color:#64748b;margin-top:16px}";
 
 fn shell(inner: &str) -> String {
@@ -164,27 +205,70 @@ fn error_page(msg: &str) -> Response {
 
 fn login_page(st: &AppState, q: &AuthorizeQuery, c: &Client, email: &str, error: Option<&str>) -> Response {
     let exp = Utc::now().timestamp() + FORM_TTL_SECS;
-    let sig = sign(&st.jwt_secret, q, exp);
+    // nonce: ràng buộc ID token Google/Apple với trang này (nằm trong chữ ký form) + nonce CSP cho script nội tuyến.
+    let nonce = hex::encode(rand::random::<[u8; 16]>());
+    let sig = sign(&st.jwt_secret, q, exp, &nonce);
     let hidden = [("client_id", &q.client_id), ("redirect_uri", &q.redirect_uri), ("state", &q.state), ("scope", &q.scope), ("response_type", &q.response_type)]
         .iter()
         .map(|(k, v)| format!(r#"<input type="hidden" name="{k}" value="{}">"#, esc(v)))
-        .collect::<String>();
+        .collect::<String>()
+        + &format!(r#"<input type="hidden" name="exp" value="{exp}"><input type="hidden" name="sig" value="{sig}"><input type="hidden" name="nonce" value="{nonce}">"#);
     let err = error.map(|e| format!(r#"<div class="err">{}</div>"#, esc(e))).unwrap_or_default();
     let status = if error.is_some() { StatusCode::UNAUTHORIZED } else { StatusCode::OK };
-    page(
+
+    let google = st.sso.web_google().map(str::to_string);
+    let apple = st.sso.web_apple().map(str::to_string);
+    let mut sso = String::new();
+    if google.is_some() || apple.is_some() {
+        sso.push_str(&format!(
+            r#"<div class="or">hoặc</div><form id="sso" method="post" action="/oauth/authorize">{hidden}<input type="hidden" name="provider"><input type="hidden" name="id_token"><input type="hidden" name="name"></form><div class="sso">"#
+        ));
+        if let Some(cid) = &google {
+            sso.push_str(&format!(
+                r#"<div id="g_id_onload" data-client_id="{cid}" data-callback="msGoogle" data-nonce="{nonce}" data-ux_mode="popup" data-auto_prompt="false" data-use_fedcm_for_button="true"></div><div class="g_id_signin" data-type="standard" data-text="continue_with" data-shape="pill" data-width="320" data-locale="vi"></div>"#,
+                cid = esc(cid)
+            ));
+        }
+        if apple.is_some() {
+            sso.push_str(r#"<button type="button" class="apple" id="apple-btn"> Tiếp tục với Apple</button>"#);
+        }
+        sso.push_str("</div>");
+        // Script nội tuyến (có nonce CSP): nhận ID token rồi gửi form #sso; backend kiểm tra token + nonce + chữ ký form.
+        let apple_js = apple
+            .as_ref()
+            .map(|sid| {
+                format!(
+                    r#"document.getElementById('apple-btn').addEventListener('click',async function(){{try{{AppleID.auth.init({{clientId:{sid},scope:'name email',redirectURI:location.origin+'/oauth/authorize',state:'link',nonce:{n},usePopup:true}});var d=await AppleID.auth.signIn();var u=d.user&&d.user.name?[d.user.name.firstName,d.user.name.lastName].filter(Boolean).join(' '):'';msSubmit('apple',d.authorization.id_token,u);}}catch(e){{}}}});"#,
+                    sid = serde_json::to_string(sid).unwrap_or_default(),
+                    n = serde_json::to_string(&nonce).unwrap_or_default(),
+                )
+            })
+            .unwrap_or_default();
+        sso.push_str(&format!(
+            r#"<script nonce="{nonce}">function msSubmit(p,t,n){{var f=document.getElementById('sso');f.provider.value=p;f.id_token.value=t;f.name.value=n||'';f.submit();}}function msGoogle(r){{msSubmit('google',r.credential);}}{apple_js}</script>"#
+        ));
+        if google.is_some() {
+            sso.push_str(r#"<script src="https://accounts.google.com/gsi/client" async></script>"#);
+        }
+        if apple.is_some() {
+            sso.push_str(r#"<script src="https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js"></script>"#);
+        }
+    }
+    let scripts = Scripts { nonce: (!sso.is_empty()).then(|| nonce.clone()), google: google.is_some(), apple: apple.is_some() };
+    page_with(
         status,
         shell(&format!(
             r#"<h1>Liên kết tài khoản với {name}</h1>
 <p>Đăng nhập tài khoản MSmart để dùng thiết bị trong nhà với {name}.</p>
 <form method="post" action="/oauth/authorize" autocomplete="on">{hidden}
-<input type="hidden" name="exp" value="{exp}"><input type="hidden" name="sig" value="{sig}">
 <label for="email">Email</label><input id="email" name="email" type="email" required autocomplete="username" value="{email}">
 <label for="password">Mật khẩu</label><input id="password" name="password" type="password" required autocomplete="current-password">
-{err}<button type="submit">Đăng nhập và cho phép</button></form>
+{err}<button type="submit">Đăng nhập và cho phép</button></form>{sso}
 <p class="note">Khi đăng nhập, bạn cho phép {name} xem và điều khiển các thiết bị MSmart của bạn. Bạn có thể huỷ liên kết bất cứ lúc nào trong ứng dụng Google Home.</p>"#,
             name = c.name,
             email = esc(email),
         )),
+        &scripts,
     )
 }
 
@@ -216,6 +300,15 @@ pub struct AuthorizeForm {
     exp: String,
     #[serde(default)]
     sig: String,
+    #[serde(default)]
+    nonce: String,
+    /// Đăng nhập bằng Google/Apple: "google" | "apple" + ID token (rỗng = đăng nhập email/mật khẩu).
+    #[serde(default)]
+    provider: String,
+    #[serde(default)]
+    id_token: String,
+    #[serde(default)]
+    name: String,
 }
 
 /// Trình duyệt gửi Origin khác máy chủ này = form bị gửi từ trang khác (login CSRF) → từ chối.
@@ -240,12 +333,34 @@ pub async fn authorize_submit(
         Ok(c) => c,
         Err(e) => return error_page(e),
     };
-    if !same_origin(&headers) || exp < Utc::now().timestamp() || !ct_eq(&sign(&st.jwt_secret, &q, exp), &f.sig) {
+    if !same_origin(&headers) || exp < Utc::now().timestamp() || !ct_eq(&sign(&st.jwt_secret, &q, exp, &f.nonce), &f.sig) {
         return error_page("Phiên đăng nhập đã hết hạn. Hãy bắt đầu lại từ ứng dụng Google Home.");
     }
 
     // Cùng giới hạn tốc độ với đăng nhập trong app.
     let ip = peer_ip(&st, &headers, peer);
+    if !f.provider.is_empty() {
+        let ip_key = format!("login-ip:{ip}");
+        if st.limiter.check(&ip_key, LOGIN_FAIL_PER_IP, LOGIN_WINDOW).is_err() {
+            return login_page(&st, &q, c, "", Some("Thử quá nhiều lần. Vui lòng đợi khoảng 15 phút rồi thử lại."));
+        }
+        let Some(p) = crate::sso::Provider::parse(&f.provider) else { return error_page("Yêu cầu không hợp lệ.") };
+        let id = match st.sso.verify(p, f.id_token.trim(), Some(&f.nonce)).await {
+            Ok(id) => id,
+            Err(_) => {
+                st.limiter.record(&ip_key);
+                tracing::warn!(%ip, provider = p.as_str(), "oauth sso login failed");
+                return login_page(&st, &q, c, "", Some("Không đăng nhập được. Hãy thử lại."));
+            }
+        };
+        return match crate::sso::resolve_user(&st, &id, Some(f.name.trim()).filter(|n| !n.is_empty())).await {
+            Ok(user) => issue_code(&st, c, &q, user).await,
+            Err(e) => {
+                tracing::error!("oauth sso resolve: {e:?}");
+                error_page("Máy chủ đang gặp sự cố. Vui lòng thử lại sau.")
+            }
+        };
+    }
     let email = f.email.trim().to_lowercase();
     let (ip_key, acct_key) = (format!("login-ip:{ip}"), format!("login-acct:{email}"));
     if st.limiter.check(&ip_key, LOGIN_FAIL_PER_IP, LOGIN_WINDOW).is_err() || st.limiter.check(&acct_key, LOGIN_FAIL_PER_ACCOUNT, LOGIN_WINDOW).is_err() {
@@ -265,7 +380,11 @@ pub async fn authorize_submit(
         }
     };
     st.limiter.clear(&acct_key);
+    issue_code(&st, c, &q, user).await
+}
 
+/// Cấp mã ủy quyền một lần cho Google và chuyển hướng về redirect_uri.
+async fn issue_code(st: &AppState, c: &Client, q: &AuthorizeQuery, user: Uuid) -> Response {
     let code = auth::random_token("ac");
     let ins = sqlx::query("INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, scope, expires_at) VALUES ($1,$2,$3,$4,$5,$6)")
         .bind(auth::hash_token(&code))
@@ -484,16 +603,17 @@ mod tests {
     #[test]
     fn signature_binds_every_parameter() {
         let q = AuthorizeQuery { client_id: "g".into(), redirect_uri: "https://r".into(), state: "s".into(), scope: "".into(), response_type: "code".into() };
-        let base = sign(b"k", &q, 100);
-        assert_eq!(base, sign(b"k", &q, 100));
+        let base = sign(b"k", &q, 100, "n");
+        assert_eq!(base, sign(b"k", &q, 100, "n"));
         let mut q2 = q.clone();
         q2.redirect_uri = "https://evil".into();
-        assert_ne!(base, sign(b"k", &q2, 100));
+        assert_ne!(base, sign(b"k", &q2, 100, "n"));
         let mut q3 = q.clone();
         q3.state = "s2".into();
-        assert_ne!(base, sign(b"k", &q3, 100));
-        assert_ne!(base, sign(b"k", &q, 101));
-        assert_ne!(base, sign(b"other", &q, 100));
+        assert_ne!(base, sign(b"k", &q3, 100, "n"));
+        assert_ne!(base, sign(b"k", &q, 101, "n"));
+        assert_ne!(base, sign(b"other", &q, 100, "n"));
+        assert_ne!(base, sign(b"k", &q, 100, "m"), "nonce nằm trong chữ ký");
     }
 
     #[test]
