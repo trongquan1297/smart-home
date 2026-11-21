@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MSmart — Điều khiển ngôi nhà của bạn, ở mọi nơi</title>
-<meta name="description" content="MSmart: ứng dụng nhà thông minh điều khiển công tắc, cảm biến, camera Zigbee/Wi‑Fi từ xa; ngữ cảnh hẹn giờ, tự động khi rời nhà, chia sẻ quyền cho gia đình và khách thuê, kết nối Google Home và Apple Home.">
+<title>MSmart — Nhà thông minh điều khiển bằng ứng dụng và Google Home</title>
+<meta name="description" content="MSmart: giải pháp nhà thông minh cho gia đình — bộ điều khiển trung tâm Zigbee kết nối công tắc, đèn, ổ cắm, rèm, cảm biến, camera; điều khiển bằng ứng dụng iOS/Android và giọng nói qua Google Home.">
 <meta name="theme-color" content="#0ea5e9">
 <link rel="icon" href="assets/logo.png">
 <meta property="og:title" content="MSmart — Điều khiển ngôi nhà của bạn, ở mọi nơi">
@@ -22,12 +22,12 @@
     <a class="logo" href="#"><img src="assets/logo.png" alt="">MSmart</a>
     <nav aria-label="Mục lục">
       <a href="#tinh-nang">Tính năng</a>
-      <a href="#tu-dong">Tự động hoá</a>
-      <a href="#chia-se">Chia sẻ quyền</a>
-      <a href="#ket-noi">Kết nối</a>
+      <a href="devices.html">Thiết bị</a>
+      <a href="app.html">Ứng dụng</a>
+      <a href="app.html#giong-noi">Giọng nói</a>
       <a href="#hoi-dap">Hỏi đáp</a>
     </nav>
-    <a class="btn btn-brand" href="#tai-app">Tải ứng dụng</a>
+    <a class="btn btn-brand" href="app.html#tai-app">Tải ứng dụng</a>
   </div>
 </header>
 
@@ -36,11 +36,12 @@
 <section class="hero">
   <div class="wrap">
     <div>
-      <h1>Điều khiển ngôi nhà của bạn, ở mọi nơi</h1>
-      <p>MSmart gom công tắc, cảm biến và camera trong nhà vào một ứng dụng. Bật tắt từ xa, hẹn giờ theo thói quen, tự động khi bạn rời nhà, và chia sẻ quyền cho gia đình hay khách thuê chỉ bằng một mã mời.</p>
+      <h1>Nhà thông minh MSmart — điều khiển bằng ứng dụng và giọng nói</h1>
+      <p>Giải pháp nhà thông minh cho gia đình: bộ điều khiển trung tâm MSmart kết nối công tắc, đèn, ổ cắm, rèm, cảm biến và camera trong nhà lên MSmart Cloud. Bạn điều khiển tất cả bằng ứng dụng MSmart hoặc nói “Hey Google” với Google Home — ở nhà hay ở xa.</p>
+      <p style="font-size:15px;opacity:.85;margin-top:-14px">MSmart is a smart-home platform for homeowners: our home controller connects Zigbee switches, lights, plugs, curtains, sensors and Wi‑Fi cameras to the MSmart cloud, controlled with the MSmart app and by voice via Google Home.</p>
       <div class="cta">
-        <a class="btn btn-primary" href="#tai-app">Tải ứng dụng</a>
-        <a class="btn btn-ghost" href="#tinh-nang">Xem tính năng</a>
+        <a class="btn btn-primary" href="devices.html">Thiết bị tương thích</a>
+        <a class="btn btn-ghost" href="app.html">Ứng dụng MSmart</a>
       </div>
       <div class="chips" aria-label="Điểm nổi bật">
         <span class="chip">Zigbee 3.0</span>
@@ -51,25 +52,8 @@
       </div>
     </div>
 
-    <div class="phone-wrap" aria-hidden="true">
-      <div class="phone">
-        <div class="notch"></div>
-        <div class="screen">
-          <div class="scr-head">
-            <small>Căn hộ của tôi · 4 phòng</small>
-            <b>Chào buổi tối 👋</b>
-            <div class="scene"><span class="on">✨ Về nhà</span><span>Đi ngủ</span><span>Ra ngoài</span></div>
-          </div>
-          <div class="tiles">
-            <div class="tile on"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#b45309" stroke-width="2" stroke-linecap="round"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.6.6 1 1.4 1 2.5h6c0-1.1.4-1.9 1-2.5A6 6 0 0 0 12 3z"/></svg></div><div class="t">Đèn trần phòng khách</div><div class="s">Đang bật · 80%</div></div>
-            <div class="tile"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"><rect x="6" y="3" width="12" height="18" rx="3"/><path d="M12 7v4"/></svg></div><div class="t">Công tắc phòng ngủ</div><div class="s">2 nút · đã tắt</div></div>
-            <div class="tile on"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#b45309" stroke-width="2" stroke-linecap="round"><path d="M12 2v6M8 4.5A7 7 0 1 0 16 4.5"/></svg></div><div class="t">Bình nóng lạnh</div><div class="s">Tự tắt sau 30 phút</div></div>
-            <div class="tile alert"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round"><path d="M4 21V4a1 1 0 0 1 1-1h10l4 4v14"/><path d="M14 12h.01"/></svg></div><div class="t">Cửa ra vào</div><div class="s">Vừa mở · 21:04</div></div>
-            <div class="tile"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg></div><div class="t">Camera sân</div><div class="s">Trực tiếp</div></div>
-            <div class="tile"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="7" r="3"/><path d="M5 21a7 7 0 0 1 14 0"/></svg></div><div class="t">Cảm biến hiện diện</div><div class="s">Không có người</div></div>
-          </div>
-        </div>
-      </div>
+    <div class="phone-wrap">
+      <figure class="shot" style="margin:0"><img src="assets/screens/app-scene.jpg" alt="Ảnh chụp ứng dụng MSmart: tổng quan căn hộ với ngữ cảnh đang bật"></figure>
     </div>
   </div>
 </section>
@@ -111,6 +95,41 @@
         <h3>Nhiều căn hộ, nhiều phòng</h3>
         <p>Quản lý nhiều căn hộ trong một tài khoản, chia thiết bị theo phòng, đặt tên riêng cho từng nút công tắc và loại tải (đèn, quạt, ổ cắm…).</p>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- DEVICES -->
+<section id="thiet-bi" class="alt">
+  <div class="wrap center">
+    <span class="eyebrow">Thiết bị</span>
+    <h2>Thiết bị thông minh hoạt động với MSmart</h2>
+    <p class="lead">Bộ điều khiển trung tâm MSmart dùng Zigbee 3.0 — chuẩn không dây tiết kiệm điện dành cho nhà thông minh — và hỗ trợ camera Wi‑Fi.</p>
+    <div class="dev-grid" style="text-align:left">
+      <a class="dev" href="devices.html" style="text-decoration:none"><img src="assets/devices/hub.svg" alt="Hình minh hoạ bộ điều khiển trung tâm"><div class="body"><h3>Bộ điều khiển trung tâm</h3><p>Zigbee 3.0, kết nối đám mây MSmart</p></div></a>
+      <a class="dev" href="devices.html" style="text-decoration:none"><img src="assets/devices/switch-2.svg" alt="Hình minh hoạ công tắc âm tường"><div class="body"><h3>Công tắc âm tường 1 · 2 · 3 nút</h3><p>Bật tắt từ xa, theo ngữ cảnh, bằng giọng nói</p></div></a>
+      <a class="dev" href="devices.html" style="text-decoration:none"><img src="assets/devices/bulb.svg" alt="Hình minh hoạ bóng đèn thông minh"><div class="body"><h3>Đèn, ổ cắm, rèm</h3><p>Độ sáng, đo điện, vị trí rèm</p></div></a>
+      <a class="dev" href="devices.html" style="text-decoration:none"><img src="assets/devices/door.svg" alt="Hình minh hoạ cảm biến cửa"><div class="body"><h3>Cảm biến cửa, hiện diện</h3><p>Cảnh báo tức thì khi đang canh</p></div></a>
+      <a class="dev" href="devices.html" style="text-decoration:none"><img src="assets/devices/thermo.svg" alt="Hình minh hoạ cảm biến nhiệt độ"><div class="body"><h3>Cảm biến nhiệt độ, độ ẩm</h3><p>Theo dõi từng phòng</p></div></a>
+      <a class="dev" href="devices.html" style="text-decoration:none"><img src="assets/devices/camera.svg" alt="Hình minh hoạ camera Wi‑Fi"><div class="body"><h3>Camera Wi‑Fi</h3><p>Xem trực tiếp, PTZ, cảnh báo chuyển động</p></div></a>
+    </div>
+    <p style="margin-top:28px"><a class="btn btn-brand" href="devices.html">Xem danh sách thiết bị và model</a></p>
+  </div>
+</section>
+
+<!-- VOICE -->
+<section id="giong-noi">
+  <div class="wrap split">
+    <div>
+      <span class="eyebrow">Google Home</span>
+      <h2>“Hey Google, bật đèn phòng khách”</h2>
+      <p class="lead">Liên kết tài khoản MSmart với Google Home để điều khiển thiết bị bằng giọng nói trên điện thoại, loa và màn hình Google. Thiết bị, tên và phòng tự đồng bộ; trạng thái cập nhật ngay khi có thay đổi.</p>
+      <p style="margin-top:22px"><a class="btn btn-brand" href="app.html#giong-noi">Cách liên kết Google Home</a></p>
+    </div>
+    <div class="voice" style="grid-template-columns:1fr">
+      <div class="bubble"><b>“Hey Google, tắt hết đèn”</b><span>Tắt mọi đèn trong nhà</span></div>
+      <div class="bubble"><b>“Hey Google, chỉnh đèn trần 50%”</b><span>Độ sáng với bóng đèn hỗ trợ</span></div>
+      <div class="bubble"><b>“Hey Google, turn off the bedroom switch”</b><span>Dùng tiếng Anh cũng được</span></div>
     </div>
   </div>
 </section>

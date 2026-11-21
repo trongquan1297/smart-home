@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thiết bị tương thích — MSmart</title>
+<meta name="description" content="Danh sách thiết bị nhà thông minh MSmart hỗ trợ: bộ điều khiển trung tâm Zigbee, công tắc âm tường, bóng đèn, ổ cắm, rèm, cảm biến và camera Wi‑Fi — điều khiển bằng ứng dụng và Google Home.">
+<meta name="theme-color" content="#0ea5e9">
+<link rel="icon" href="assets/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="logo" href="index.html"><img src="assets/logo.png" alt="">MSmart</a>
+    <nav aria-label="Mục lục">
+      <a href="index.html">Trang chủ</a>
+      <a href="devices.html" aria-current="page" style="color:var(--text)">Thiết bị</a>
+      <a href="app.html">Ứng dụng</a>
+      <a href="index.html#hoi-dap">Hỏi đáp</a>
+    </nav>
+    <a class="btn btn-brand" href="app.html#tai-app">Tải ứng dụng</a>
+  </div>
+</header>
+
+<main>
+<section class="page-hero">
+  <div class="wrap">
+    <span class="eyebrow">Thiết bị tương thích · Supported hardware</span>
+    <h1>Thiết bị thông minh hoạt động với MSmart</h1>
+    <p>Bộ điều khiển trung tâm MSmart kết nối các thiết bị Zigbee 3.0 trong nhà (công tắc, đèn, ổ cắm, rèm, cảm biến) và camera Wi‑Fi lên nền tảng đám mây MSmart. Người dùng điều khiển chúng bằng ứng dụng MSmart trên điện thoại hoặc bằng giọng nói qua Google Home.</p>
+    <p class="en"><b>In English:</b> The MSmart home controller connects Zigbee 3.0 smart-home devices (wall switches, lights, plugs, curtains, sensors) and Wi‑Fi cameras to the MSmart cloud. End users control them with the MSmart mobile app and by voice through Google Home (cloud-to-cloud integration).</p>
+  </div>
+</section>
+
+<section style="padding-top:56px">
+  <div class="wrap">
+    <h2>Hệ thống hoạt động thế nào</h2>
+    <div class="arch" aria-label="Sơ đồ kết nối">
+      <div class="node">Công tắc, đèn, cảm biến<small>Zigbee 3.0</small></div>
+      <span class="arrow">⇄</span>
+      <div class="node">Bộ điều khiển MSmart<small>trong nhà</small></div>
+      <span class="arrow">⇄</span>
+      <div class="node">MSmart Cloud<small>mã hoá HTTPS / WSS</small></div>
+      <span class="arrow">⇄</span>
+      <div class="node">Ứng dụng MSmart<small>iOS · Android</small></div>
+      <span class="arrow">·</span>
+      <div class="node">Google Home<small>giọng nói, Hey Google</small></div>
+    </div>
+
+    <div class="legend">
+      <span><span class="tag real">Đã chạy với thiết bị thật</span> kiểm thử trên hệ thống thật tại nhà</span>
+      <span><span class="tag sim">Tương thích</span> hỗ trợ trong phần mềm, đã kiểm thử bằng bộ giả lập</span>
+    </div>
+
+    <div class="dev-grid">
+      <article class="dev">
+        <img src="assets/devices/hub.svg" alt="Hình minh hoạ bộ điều khiển trung tâm MSmart với USB Zigbee">
+        <div class="body">
+          <span class="tag real">Đã chạy với thiết bị thật</span>
+          <h3>Bộ điều khiển trung tâm MSmart</h3>
+          <p>Đặt trong nhà, nói chuyện với thiết bị bằng Zigbee 3.0 và chủ động kết nối lên MSmart Cloud — không cần mở cổng trên router. Tự kết nối lại khi mạng chập chờn.</p>
+          <div class="models">Raspberry Pi 4 · USB Zigbee 3.0 Sonoff Dongle Plus V2</div>
+          <div class="caps"><span>Zigbee 3.0</span><span>Wi‑Fi / LAN</span><span>Matter bridge</span></div>
+        </div>
+      </article>
+
+      <article class="dev">
+        <img src="assets/devices/switch-3.svg" alt="Hình minh hoạ công tắc âm tường 3 nút">
+        <div class="body">
+          <span class="tag real">Đã chạy với thiết bị thật</span>
+          <h3>Công tắc âm tường Zigbee 1 · 2 · 3 nút</h3>
+          <p>Bật/tắt từng nút từ xa, trạng thái cập nhật cả khi bấm tay trên tường. Mỗi nút đặt được loại tải (đèn, quạt, ổ cắm, bình nóng lạnh).</p>
+          <div class="models">VSmart HS-SW100ZB-VNM · HS-SW200ZB-VNM · HS-SW300ZB-VNM</div>
+          <div class="caps"><span>App</span><span>Google Home</span><span>Giọng nói</span><span>Ngữ cảnh</span><span>Hẹn giờ</span></div>
+        </div>
+      </article>
+
+      <article class="dev">
+        <img src="assets/devices/door.svg" alt="Hình minh hoạ cảm biến cửa">
+        <div class="body">
+          <span class="tag real">Đã chạy với thiết bị thật</span>
+          <h3>Cảm biến cửa</h3>
+          <p>Báo cửa mở / đóng theo thời gian thực, gửi thông báo đẩy khi đang bật chế độ canh.</p>
+          <div class="models">VSmart HS-SEDR00ZB-VNM</div>
+          <div class="caps"><span>App</span><span>Google Home</span><span>Cảnh báo</span></div>
+        </div>
+      </article>
+
+      <article class="dev">
+        <img src="assets/devices/motion.svg" alt="Hình minh hoạ cảm biến hiện diện">
+        <div class="body">
+          <span class="tag real">Đã chạy với thiết bị thật</span>
+          <h3>Cảm biến hiện diện</h3>
+          <p>Phát hiện có người trong phòng; dùng cho cảnh báo an ninh và tự động hoá.</p>
+          <div class="models">VSmart HS-SEOC00ZB-VNM</div>
+          <div class="caps"><span>App</span><span>Google Home</span><span>Cảnh báo</span></div>
+        </div>
+      </article>
+
+      <article class="dev">
+        <img src="assets/devices/bulb.svg" alt="Hình minh hoạ bóng đèn thông minh">
+        <div class="body">
+          <span class="tag sim">Tương thích</span>
+          <h3>Bóng đèn Zigbee chỉnh độ sáng</h3>
+          <p>Bật/tắt trong ứng dụng; bật/tắt và chỉnh độ sáng bằng giọng nói qua Google Home.</p>
+          <div class="models">ví dụ: IKEA TRADFRI LED1623G12</div>
+          <div class="caps"><span>App</span><span>Google Home</span><span>Độ sáng</span></div>
+        </div>
+      </article>
+
+      <article class="dev">
+        <img src="assets/devices/plug.svg" alt="Hình minh hoạ ổ cắm thông minh">
+        <div class="body">
+          <span class="tag sim">Tương thích</span>
+          <h3>Ổ cắm thông minh đo điện</h3>
+          <p>Bật/tắt thiết bị cắm điện, xem công suất, dòng điện, điện áp và điện năng tiêu thụ.</p>
+          <div class="models">ví dụ: Aqara ZNCZ12LM · Tuya TS011F</div>
+          <div class="caps"><span>App</span><span>Google Home</span><span>Đo điện</span></div>
+        </div>
+      </article>
+
+      <article class="dev">
+        <img src="assets/devices/curtain.svg" alt="Hình minh hoạ rèm cửa tự động">
+        <div class="body">
+          <span class="tag sim">Tương thích</span>
+          <h3>Công tắc rèm / cửa cuốn</h3>
+          <p>Mở, dừng, đóng và kéo tới vị trí mong muốn.</p>
+          <div class="models">ví dụ: Tuya TS130F</div>
+          <div class="caps"><span>App</span><span>Google Home</span><span>Vị trí %</span></div>
+        </div>
+      </article>
+
+      <article class="dev">
+        <img src="assets/devices/thermo.svg" alt="Hình minh hoạ cảm biến nhiệt độ độ ẩm">
+        <div class="body">
+          <span class="tag sim">Tương thích</span>
+          <h3>Cảm biến nhiệt độ · độ ẩm</h3>
+          <p>Theo dõi nhiệt độ, độ ẩm trong từng phòng, trong ứng dụng và trong Google Home.</p>
+          <div class="models">ví dụ: Aqara WSDCGQ11LM · Tuya TS0201</div>
+          <div class="caps"><span>App</span><span>Google Home</span></div>
+        </div>
+      </article>
+
+      <article class="dev">
+        <img src="assets/devices/camera.svg" alt="Hình minh hoạ camera Wi‑Fi">
+        <div class="body">
+          <span class="tag sim">Tương thích</span>
+          <h3>Camera Wi‑Fi</h3>
+          <p>Xem trực tiếp, xoay camera (PTZ) và nhận cảnh báo chuyển động ngay trong ứng dụng MSmart.</p>
+          <div class="models">Camera chuẩn ONVIF hoặc RTSP</div>
+          <div class="caps"><span>App</span><span>Xem trực tiếp</span><span>PTZ</span><span>Cảnh báo</span></div>
+        </div>
+      </article>
+    </div>
+
+    <p style="color:var(--muted);margin-top:26px;font-size:15px">Ngoài danh sách trên, các thiết bị Zigbee 3.0 khác được Zigbee2MQTT hỗ trợ cũng ghép được với bộ điều khiển; ứng dụng hiển thị và điều khiển theo đúng khả năng thiết bị báo về. Hình trên trang là hình minh hoạ. Tên và model thiết bị thuộc về nhà sản xuất tương ứng.</p>
+  </div>
+</section>
+
+<section class="alt">
+  <div class="wrap split">
+    <div>
+      <span class="eyebrow">Ghép thiết bị</span>
+      <h2>Thêm thiết bị mới ngay trên điện thoại</h2>
+      <ul class="list">
+        <li><span>Trong ứng dụng, mở căn hộ → bấm <b>+</b> → <b>Thiết bị Zigbee</b>.</span></li>
+        <li><span>Reset thiết bị theo hướng dẫn của hãng; thiết bị hiện ra trong vài giây.</span></li>
+        <li><span>Đặt tên, chọn phòng — thiết bị xuất hiện luôn trong Google Home nếu bạn đã liên kết tài khoản.</span></li>
+      </ul>
+      <p style="margin-top:22px"><a class="btn btn-brand" href="app.html">Xem ứng dụng MSmart</a></p>
+    </div>
+    <div class="shots" style="grid-template-columns:1fr;margin-top:0">
+      <figure class="shot"><img src="assets/screens/app-devices.jpg" alt="Ảnh chụp màn hình ứng dụng MSmart: danh sách thiết bị theo phòng" loading="lazy"><figcaption>Thiết bị theo phòng<small>Ảnh chụp ứng dụng MSmart</small></figcaption></figure>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="logo" style="font-size:16px"><img src="assets/logo.png" alt="" style="width:28px;height:28px">MSmart</div>
+    <div>© <span id="y">2026</span> Newmoon22 Studios · <a href="mailto:info@newmoon.cloud">info@newmoon.cloud</a> · <a href="privacy.html">Chính sách quyền riêng tư</a><br>Google Home, Apple Home, Matter và tên thiết bị là nhãn hiệu của chủ sở hữu tương ứng.</div>
+  </div>
+</footer>
+<script>document.getElementById('y').textContent = new Date().getFullYear();</script>
+</body>
+</html>
