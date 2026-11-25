@@ -218,8 +218,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           contentPadding: EdgeInsets.zero,
                         ),
                       ),
-                      if (home.isAdmin) ...const [
-                        PopupMenuItem(
+                      if (home.isAdmin && matterEnabled)
+                        const PopupMenuItem(
                           value: 'matter',
                           child: ListTile(
                             leading: IconBadge(Icons.qr_code_2_rounded, colors: Vivid.matter, size: 32),
@@ -227,6 +227,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             contentPadding: EdgeInsets.zero,
                           ),
                         ),
+                      if (home.isAdmin) ...const [
                         PopupMenuItem(
                           value: 'speakers',
                           child: ListTile(

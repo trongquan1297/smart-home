@@ -49,9 +49,11 @@
 	<key>NSCameraUsageDescription</key>
 	<string>MSmart chỉ hiển thị hình ảnh từ camera an ninh trong nhà bạn và không dùng camera của điện thoại.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>MSmart theo dõi việc bạn vào/ra khỏi căn hộ (kể cả khi app đóng) để tự chạy ngữ cảnh "rời nhà". Chỉ trạng thái trong/ngoài được gửi lên máy chủ, không gửi toạ độ.</string>
+	<string>Chỉ dùng cho tính năng tuỳ chọn "Tự chuyển khi rời nhà": điện thoại theo dõi khi bạn đi vào hoặc ra khỏi vùng quanh căn hộ (mặc định bán kính 150 m), kể cả khi app đã đóng, để khi người cuối cùng rời nhà thì MSmart tự chạy ngữ cảnh bạn chọn. Ví dụ: bạn khoá cửa đi làm, đèn và ổ cắm trong nhà tự tắt. Máy chủ chỉ nhận "đang ở nhà" hoặc "đã rời nhà", không nhận toạ độ hay đường đi của bạn. Có thể tắt bất cứ lúc nào trong Cài đặt.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>MSmart dùng vị trí hiện tại để đặt vị trí căn hộ của bạn.</string>
+	<string>Khi bạn bấm "Dùng vị trí hiện tại" lúc tạo ngữ cảnh "Tự chuyển khi rời nhà", MSmart lấy vị trí một lần để làm vị trí căn hộ. Ví dụ: đứng trong nhà, bấm nút này để lưu vị trí căn hộ và vùng quanh nhà dùng để biết khi mọi người đã rời đi. Vị trí không dùng cho quảng cáo hay mục đích nào khác.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>MSmart kết nối trực tiếp tới camera an ninh trong nhà bạn qua mạng Wi‑Fi nội bộ khi bạn xem camera ở nhà, để hình ảnh mượt và không phải đi vòng qua Internet. Ví dụ: mở màn Camera khi đang ở nhà. App không quét hay thu thập thông tin các thiết bị khác trong mạng.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>MSmart không ghi âm. Thư viện xem camera trực tiếp có hỗ trợ micro, nhưng app không dùng micro của điện thoại.</string>
 	<key>UIApplicationSceneManifest</key>

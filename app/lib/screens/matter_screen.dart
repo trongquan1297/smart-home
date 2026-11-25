@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +12,12 @@ import '../api.dart';
 import '../app_model.dart';
 import '../widgets/ui.dart';
 import '../models.dart';
+
+/// Bật/tắt tính năng ghép Matter (Google Home / Apple Home) trong app.
+/// Tạm ẩn trên iOS: bridge chưa được CSA chứng nhận Matter, chưa đăng ký chương trình Apple Home, nên chưa được nêu
+/// "Matter"/"Apple Home" trong app gửi App Store. Bật lại khi build: --dart-define=MATTER_ENABLED=true (hoặc false để ẩn cả Android).
+const _matterFlag = String.fromEnvironment('MATTER_ENABLED');
+bool get matterEnabled => _matterFlag.isEmpty ? !(!kIsWeb && Platform.isIOS) : _matterFlag == 'true';
 
 /// Kết nối Google Home / Apple Home qua Matter: hiện mã QR để quét trong Home app.
 /// Matter chạy trên mạng LAN của nhà nên bridge nằm trên Pi; mã chỉ đi qua gateway, không lưu trên cloud.
