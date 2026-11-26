@@ -354,7 +354,7 @@ class AppModel extends ChangeNotifier {
   Future<void> refreshGeofence({bool force = false}) async {
     final h = home;
     if (h == null || !GeofenceService.supported) return;
-    final wanted = h.canRunScenes && h.hasLocation && scenes.any((s) => s.autoLeave);
+    final wanted = h.canRunScenes && h.hasLocation && scenes.any((s) => s.autoLeave || s.autoArrive);
     final sig = '${h.id}|$wanted|${h.geoLat}|${h.geoLng}|${h.geoRadius}';
     if (!force && sig == _geoSig) return;
     _geoSig = sig;

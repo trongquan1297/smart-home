@@ -601,6 +601,32 @@ class SceneAction {
   Map<String, dynamic> toJson() => {'device_id': deviceId, 'payload': payload};
 }
 
+/// Điều kiện cảm biến tự kích hoạt ngữ cảnh: cảm biến chuyển sang trạng thái `event`.
+class SceneSensorTrigger {
+  final String deviceId;
+  final String event; // occupied | vacant | open | closed
+  const SceneSensorTrigger(this.deviceId, this.event);
+
+  static const presenceEvents = ['occupied', 'vacant'];
+  static const doorEvents = ['open', 'closed'];
+
+  static String label(String event) => switch (event) {
+    'occupied' => 'Có người',
+    'vacant' => 'Hết người',
+    'open' => 'Cửa mở',
+    'closed' => 'Cửa đóng',
+    _ => event,
+  };
+
+  factory SceneSensorTrigger.fromJson(Map<String, dynamic> j) => SceneSensorTrigger(j['device_id'] as String, j['event'] as String);
+  Map<String, dynamic> toJson() => {'device_id': deviceId, 'event': event};
+
+  @override
+  bool operator ==(Object other) => other is SceneSensorTrigger && other.deviceId == deviceId && other.event == event;
+  @override
+  int get hashCode => Object.hash(deviceId, event);
+}
+
 class Scene {
   final String id;
   final String name;
@@ -616,6 +642,11 @@ class Scene {
   final bool autoLeave; // tự chạy khi người cuối cùng rời nhà
   final List<String> speakerIds; // loa Cast đọc thông báo khi ngữ cảnh TỰ chạy
   final String? speakText; // câu tuỳ chỉnh; null = câu tự sinh
+  final int stepDelayMs; // giãn cách giữa các gang khi chạy; 0 = bật/tắt cùng lúc
+  final bool autoArrive; // tự chạy khi người đầu tiên về nhà
+  final String? autoTimeEnd; // "HH:MM" kết thúc khung giờ; null = chỉ mốc giờ
+  final List<SceneSensorTrigger> triggerSensors;
+  final String triggerLogic; // any = HOẶC, all = VÀ
 
   Scene({
     required this.id,
@@ -632,7 +663,16 @@ class Scene {
     this.autoLeave = false,
     this.speakerIds = const [],
     this.speakText,
+    this.stepDelayMs = 0,
+    this.autoArrive = false,
+    this.autoTimeEnd,
+    this.triggerSensors = const [],
+    this.triggerLogic = 'any',
   });
+
+  /// Số điều kiện tự kích hoạt đang bật.
+  int get triggerCount => (autoEnabled ? 1 : 0) + (autoLeave ? 1 : 0) + (autoArrive ? 1 : 0) + triggerSensors.length;
+  bool get requiresAll => triggerLogic == 'all' && triggerCount > 1;
 
   factory Scene.fromJson(Map<String, dynamic> j) => Scene(
     id: j['id'],
@@ -651,9 +691,19 @@ class Scene {
     autoLeave: j['auto_leave'] == true,
     speakerIds: [for (final d in (j['speaker_ids'] as List? ?? [])) d as String],
     speakText: j['speak_text'],
+    stepDelayMs: (j['step_delay_ms'] as num?)?.toInt() ?? 0,
+    autoArrive: j['auto_arrive'] == true,
+    autoTimeEnd: j['auto_time_end'],
+    triggerSensors: [
+      for (final t in (j['trigger_sensors'] as List? ?? [])) SceneSensorTrigger.fromJson(Map<String, dynamic>.from(t)),
+    ],
+    triggerLogic: j['trigger_logic'] ?? 'any',
   );
 
   SceneKind get kind => SceneKind.parse(icon);
+
+  /// "0,5 giây", "1 giây"…
+  static String delayLabel(int ms) => ms % 1000 == 0 ? '${ms ~/ 1000} giây' : '${(ms / 1000).toString().replaceAll('.', ',')} giây';
 
   /// "Hằng ngày", "T2–T6", "T2, T4, T6"…
   static String daysLabel(List<int> days) {

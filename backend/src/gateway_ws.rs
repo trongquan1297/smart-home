@@ -291,6 +291,7 @@ async fn handle(st: &AppState, gw: &Gw, msg: GwMsg) -> ApiResult<()> {
                 crate::alerts::on_state(st, gw.home_id, id, &old_state, &state).await;
                 crate::rules::on_state(st, gw.home_id, id, &old_state, &state).await;
                 crate::purifier::on_state(st, gw.home_id, id, &old_state, &state).await;
+                crate::triggers::on_state(st, gw.home_id, id, &old_state, &state).await;
                 crate::homegraph::device_changed(st, gw.home_id, id);
             }
         }

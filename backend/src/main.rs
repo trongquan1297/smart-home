@@ -20,6 +20,7 @@ mod ratelimit;
 mod routes;
 mod speak;
 mod sso;
+mod triggers;
 
 use std::sync::Arc;
 
@@ -48,6 +49,9 @@ pub struct AppState {
     pub alert_seen: Arc<dashmap::DashMap<(uuid::Uuid, alerts::Event), std::time::Instant>>,
     /// Lệnh gần nhất do luật thiết bị phát theo (thiết bị, gang) → (trạng thái, lúc gửi): để phân biệt bản tin phản hồi, không nối chuỗi luật `link`.
     pub rule_cmds: Arc<dashmap::DashMap<(uuid::Uuid, String), (String, std::time::Instant)>>,
+    /// Lượt chạy ngữ cảnh mới nhất của từng căn hộ (căn hộ → id lượt chạy). Ngữ cảnh chạy giãn cách dừng lại khi một
+    /// ngữ cảnh khác của căn hộ bắt đầu chạy (vd bấm "Tắt hết" giữa lúc "Bật dần"). Chỉ trong RAM một tiến trình.
+    pub scene_runs: Arc<dashmap::DashMap<uuid::Uuid, uuid::Uuid>>,
 }
 
 #[tokio::main]
@@ -88,6 +92,7 @@ async fn main() -> anyhow::Result<()> {
         apple: Arc::new(sso::AppleApi::from_env()),
         alert_seen: Arc::new(dashmap::DashMap::new()),
         rule_cmds: Arc::new(dashmap::DashMap::new()),
+        scene_runs: Arc::new(dashmap::DashMap::new()),
     };
     if state.push.is_none() {
         tracing::info!("push: FCM chưa cấu hình (đặt FCM_SERVICE_ACCOUNT_FILE để bật); cảnh báo vẫn lưu và đẩy realtime tới app đang mở");

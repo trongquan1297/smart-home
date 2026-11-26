@@ -97,14 +97,33 @@ Hệ thống đi qua **Zigbee2MQTT**, nên mọi thiết bị **Zigbee** mà Zig
 
 Chưa hỗ trợ: **Tuya Wi‑Fi** (không phải Zigbee, cần Tuya Cloud/LocalTuya, ngoài phạm vi), thanh trượt độ sáng/màu cho đèn, điều hòa/van sưởi (`climate`), khoá, quạt, nút bấm (`action`). Thiết bị loại này vẫn ghép và hiện tên, nhưng app chưa có điều khiển riêng. Việc ánh xạ sang Matter (Google/Apple Home) cho rèm và cảm biến phụ thuộc plugin `matterbridge-zigbee2mqtt`, chưa kiểm chứng. Lưu ý riêng từ trang thiết bị: Tuya `TS0201` có firmware OTA mới được báo là làm hỏng thiết bị, không nên cập nhật.
 
-## Ngữ cảnh và tự kích hoạt theo khung giờ
+## Ngữ cảnh và tự kích hoạt
 
 Trong app: căn hộ → biểu tượng ✨ **Ngữ cảnh**. Một ngữ cảnh là nhóm thao tác Bật/Tắt theo từng gang của nhiều công tắc (vd "Đi ngủ" tắt hết đèn); bấm ▶ để chạy ngay, hoặc bật **Tự động kích hoạt** để chọn giờ và các ngày trong tuần. Giờ tính theo múi giờ của căn hộ (`homes.timezone`, mặc định Asia/Ho_Chi_Minh).
 
 - Backend chạy vòng lặp nền 20 giây/lần; mỗi lần đến giờ được "giành" bằng một câu UPDATE có điều kiện nên không chạy đôi.
 - Bộ điều khiển trung tâm (Pi) offline lúc đến giờ: thử lại trong 5 phút; quá hạn thì ghi **bỏ lỡ** (hiện trên thẻ ngữ cảnh), **không chạy bù muộn**. Backend tắt đúng lúc đến giờ cũng bị coi là bỏ lỡ.
 - Chỉ nhận `ON`/`OFF` (không `TOGGLE`, để chạy lại cho cùng kết quả); payload đi qua đúng whitelist của lệnh điều khiển; lệnh tự động ghi `command_log` với `user_id` rỗng.
-- Giới hạn: 50 ngữ cảnh/căn hộ, 50 hành động/ngữ cảnh. Đây là lịch theo giờ cố định; chưa có kích hoạt theo mặt trời mọc/lặn, theo cảm biến hay theo vị trí.
+- **Bật/tắt lần lượt** (mục trong form ngữ cảnh): chọn *Cùng lúc* (mặc định) hoặc giãn cách 0,5 / 1 / 2 / 3 / 5 giây. Khi chạy, từng gang (từng bóng đèn) được gửi lần lượt theo thứ tự trong danh sách thay vì bật/tắt đồng loạt; gang đã ở đúng trạng thái thì bỏ qua, không phải chờ. Chạy tay thì app nhận phản hồi ngay ("Đang chạy lần lượt…") còn lệnh tiếp tục gửi nền; chạy một ngữ cảnh khác của căn hộ trong lúc đó sẽ dừng phần còn lại. Áp dụng cho cả chạy tay, theo giờ và khi rời nhà.
+- Giới hạn: 50 ngữ cảnh/căn hộ, 50 hành động/ngữ cảnh. Chưa có kích hoạt theo mặt trời mọc/lặn.
+
+### Điều kiện tự kích hoạt (HOẶC / VÀ)
+
+Mục **Tự động kích hoạt** trong form ngữ cảnh gồm bốn loại điều kiện, bật bao nhiêu cũng được:
+
+| Điều kiện | Sự kiện (khi nào "xảy ra") | Trạng thái (khi nào "đang đúng", dùng cho VÀ) |
+|---|---|---|
+| Hẹn giờ (`auto_time`, `auto_days`, tuỳ chọn `auto_time_end`) | đến giờ bắt đầu | đang trong khung giờ `[bắt đầu, kết thúc)` (qua nửa đêm nếu kết thúc ≤ bắt đầu); không có giờ kết thúc = 5 phút sau mốc |
+| Rời nhà (`auto_leave`) | người cuối cùng rời căn hộ | không còn ai ở nhà |
+| Về nhà (`auto_arrive`) | người đầu tiên về căn hộ | có người ở nhà |
+| Cảm biến (`trigger_sensors`, tối đa 10) | cảm biến hiện diện chuyển sang *có người* / *hết người*, cảm biến cửa sang *mở* / *đóng* | cảm biến đang ở trạng thái đó |
+
+- **Một điều kiện bất kỳ** (`trigger_logic: "any"`, mặc định): chạy khi bất kỳ sự kiện nào xảy ra.
+- **Tất cả điều kiện** (`"all"`): chạy khi một sự kiện xảy ra **và** mọi điều kiện còn lại đang đúng. Ví dụ "Cửa mở VÀ 18:00–23:00 VÀ có người ở nhà" → bật đèn hành lang; "Có người VÀ rời nhà" → báo đột nhập. Khi kết hợp VÀ, hẹn giờ bắt buộc có giờ kết thúc; không được yêu cầu cùng lúc rời nhà và về nhà. Đến giờ mà điều kiện khác chưa đúng thì lượt đó ghi **bỏ qua** (`skipped`), không chờ, không chạy bù.
+- Mỗi ngữ cảnh tự chạy tối đa một lần mỗi 60 giây (cảm biến nhấp nháy, nhiều điều kiện xảy ra cùng lúc). Sự kiện cảm biến chỉ tính khi trạng thái thật sự chuyển (gateway phát lại trạng thái lúc kết nối lại không kích hoạt gì).
+- Rời/về nhà: chưa ai báo vị trí thì trạng thái là *chưa biết* (không đúng cho cả hai); lần báo "trong" đầu tiên chỉ đặt mốc, không phải "về nhà". Nhiều ngữ cảnh có thể cùng dùng rời nhà / về nhà (bỏ giới hạn một ngữ cảnh mỗi căn hộ từ migration 0018).
+- Thông báo `scene_auto` nêu lý do ("Theo lịch 18:00", "Không còn ai ở nhà", "Có người vừa về nhà", "Cảm biến cửa: cửa vừa mở"); loa Cast đọc câu tương ứng nếu ngữ cảnh có chọn loa.
+- App bản cũ vẫn sửa được hẹn giờ / rời nhà của ngữ cảnh; các trường mới giữ nguyên khi app cũ lưu.
 
 ## Cảnh báo cảm biến và thông báo đẩy
 
@@ -114,7 +133,7 @@ Bật FCM thật (app tắt hẳn vẫn nhận): (1) thêm `app/android/app/goog
 
 ## Tự chuyển ngữ cảnh khi rời nhà
 
-Trong form ngữ cảnh có tuỳ chọn **Tự chuyển khi rời nhà** (quản trị): bấm "Dùng vị trí hiện tại" khi đang ở nhà để đặt vị trí căn hộ (`PUT /v1/homes/:id/location`, bán kính 100/150/300/500 m, mặc định 150), rồi bật tuỳ chọn. Mỗi căn hộ chỉ một ngữ cảnh dùng được tuỳ chọn này. Điện thoại của từng thành viên (chủ nhà/quản trị/thành viên) đăng ký geofence của hệ điều hành quanh vị trí đó (`native_geofence`: CLCircularRegion trên iOS, GeofencingClient trên Android; chạy cả khi app đã tắt) và chỉ báo **trong/ngoài** lên `PUT /v1/homes/:id/presence` — máy chủ không nhận toạ độ cá nhân. Khi trạng thái chung chuyển từ "còn người ở nhà" sang "không còn ai", máy chủ chạy ngữ cảnh đó (thành ngữ cảnh đang bật, ghi `command_log` với `user_id` rỗng).
+Trong form ngữ cảnh có tuỳ chọn **Tự chuyển khi rời nhà** (quản trị): bấm "Dùng vị trí hiện tại" khi đang ở nhà để đặt vị trí căn hộ (`PUT /v1/homes/:id/location`, bán kính 100/150/300/500 m, mặc định 150), rồi bật tuỳ chọn (điều kiện **Về nhà** dùng cùng cơ chế, xem "Điều kiện tự kích hoạt"). Điện thoại của từng thành viên (chủ nhà/quản trị/thành viên) đăng ký geofence của hệ điều hành quanh vị trí đó (`native_geofence`: CLCircularRegion trên iOS, GeofencingClient trên Android; chạy cả khi app đã tắt) và chỉ báo **trong/ngoài** lên `PUT /v1/homes/:id/presence` — máy chủ không nhận toạ độ cá nhân. Khi trạng thái chung chuyển từ "còn người ở nhà" sang "không còn ai", máy chủ chạy ngữ cảnh đó (thành ngữ cảnh đang bật, ghi `command_log` với `user_id` rỗng).
 
 - Quy tắc "người cuối cùng": chỉ tính thành viên đã báo trạng thái trong 7 ngày gần nhất và còn quyền; báo "ngoài" khi chưa ai từng báo "trong" thì không chạy gì; báo lặp lại không chạy lại; đổi hoặc xoá vị trí thì xoá trạng thái cũ.
 - Cần quyền vị trí **"Luôn luôn"**: app xin khi lưu ngữ cảnh, và hiện dải nhắc trên màn hình căn hộ nếu thành viên khác chưa cấp. Đăng xuất sẽ gỡ geofence của máy.
@@ -304,7 +323,7 @@ Flutter app ── backend (cloud) ◀── gateway agent ┘   (lấy mã QR, 
 | | |
 |---|---|
 | `POST /v1/auth/register`, `/v1/auth/login`, `GET /v1/me` | tài khoản; đăng ký/đăng nhập trả `token` (access, 15 phút) + `refresh_token` |
-| `GET/POST /v1/homes/:id/scenes`, `PATCH/DELETE /v1/scenes/:id`, `POST /v1/scenes/:id/run` | ngữ cảnh (scene): xem = guest, chạy = member, tạo/sửa/xoá = admin. Body: `name`, `icon`, `actions:[{device_id,payload}]`, tuỳ chọn tự kích hoạt `auto_enabled`, `auto_time` ("HH:MM"), `auto_days` (1 = T2 … 7 = CN) |
+| `GET/POST /v1/homes/:id/scenes`, `PATCH/DELETE /v1/scenes/:id`, `POST /v1/scenes/:id/run` | ngữ cảnh (scene): xem = guest, chạy = member, tạo/sửa/xoá = admin. Body: `name`, `icon`, `actions:[{device_id,payload}]`, tự kích hoạt `auto_enabled`, `auto_time` ("HH:MM"), `auto_time_end` ("HH:MM" hoặc "" để bỏ), `auto_days` (1 = T2 … 7 = CN), `auto_leave`, `auto_arrive`, `trigger_sensors:[{device_id,event}]` (event: `occupied` / `vacant` / `open` / `closed`), `trigger_logic` (`any` / `all`), giãn cách `step_delay_ms` (0–10000, 0 = cùng lúc). `run` với ngữ cảnh giãn cách trả ngay `{"status":"running"}` |
 | `POST /v1/auth/refresh`, `/v1/auth/logout`, `/v1/auth/logout-all` | làm mới (xoay vòng), đăng xuất thiết bị, đăng xuất mọi thiết bị; đăng nhập/đăng ký/làm mới có giới hạn tốc độ (`429` + `Retry-After`) |
 | `POST /v1/tenants`, `POST /v1/tenants/:tid/homes`, `GET /v1/homes` | khách hàng, căn hộ |
 | `GET/POST /v1/homes/:id/rooms`, `PATCH/DELETE /v1/rooms/:id` | phòng: tên + icon (`living` `bedroom` `kitchen` `bathroom` `dining` `office` `balcony` `garage` `kids` `laundry` `hallway` `other`) |

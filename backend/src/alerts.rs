@@ -122,27 +122,29 @@ async fn raise(st: &AppState, home: Uuid, device: Uuid, ev: Event) -> ApiResult<
 }
 
 /// Vì sao một ngữ cảnh tự chạy (không do người dùng bấm).
+#[derive(Clone, Debug)]
 pub enum AutoRun {
     /// Đến giờ đã hẹn ("HH:MM" giờ địa phương của căn hộ).
     Schedule(String),
     /// Người cuối cùng đã rời nhà.
     Leave,
+    /// Người đầu tiên về nhà.
+    Arrive,
+    /// Cảm biến (tên thiết bị, mô tả sự kiện, vd "cửa vừa mở").
+    Sensor(String, &'static str),
 }
 
-/// Báo cho thành viên rằng một ngữ cảnh vừa tự chạy (theo giờ hoặc khi rời nhà): lưu lịch sử, đẩy WebSocket và FCM.
-/// `ok = false` (gateway offline, không gửi được lệnh nào) chỉ báo cho trường hợp rời nhà vì đó là sự kiện một lần, không thử lại;
-/// lịch theo giờ tự thử lại trong 5 phút nên không báo thất bại. Lỗi ở đây chỉ ghi log, không ảnh hưởng việc chạy ngữ cảnh.
+/// Báo cho thành viên rằng một ngữ cảnh vừa tự chạy (theo giờ, rời/về nhà, cảm biến): lưu lịch sử, đẩy WebSocket và FCM.
+/// `ok = false` (gateway offline, không gửi được lệnh nào) chỉ báo cho rời/về nhà vì đó là sự kiện một lần, không thử lại;
+/// lịch theo giờ tự thử lại trong 5 phút, còn cảm biến đi qua chính gateway đó nên không báo thất bại.
+/// Lỗi ở đây chỉ ghi log, không ảnh hưởng việc chạy ngữ cảnh.
 pub async fn scene_auto_ran(st: &AppState, home: Uuid, scene: Uuid, why: AutoRun, ok: bool) {
-    if !ok && !matches!(why, AutoRun::Leave) {
+    if !ok && !matches!(why, AutoRun::Leave | AutoRun::Arrive) {
         return;
     }
     let name: Option<String> = sqlx::query_scalar("SELECT name FROM scenes WHERE id = $1").bind(scene).fetch_optional(&st.db).await.unwrap_or(None);
     let Some(name) = name else { return };
-    let (kind, title, body) = match (&why, ok) {
-        (AutoRun::Schedule(t), _) => ("scene_auto", format!("Đã tự chuyển sang \"{name}\""), format!("Theo lịch {t}")),
-        (AutoRun::Leave, true) => ("scene_auto", format!("Đã tự chuyển sang \"{name}\""), "Không còn ai ở nhà".to_string()),
-        (AutoRun::Leave, false) => ("scene_failed", format!("Không chuyển được sang \"{name}\""), "Mọi người đã rời nhà nhưng bộ điều khiển trung tâm đang offline".to_string()),
-    };
+    let (kind, title, body) = auto_texts(&why, ok, &name);
     let ins: Result<(i64, DateTime<Utc>), _> = sqlx::query_as(
         "INSERT INTO notifications (home_id, scene_id, kind, title, body) VALUES ($1,$2,$3,$4,$5) RETURNING id, created_at",
     )
@@ -163,8 +165,9 @@ pub async fn scene_auto_ran(st: &AppState, home: Uuid, scene: Uuid, why: AutoRun
         let sp: Option<(Vec<Uuid>, Option<String>)> = sqlx::query_as("SELECT speaker_ids, speak_text FROM scenes WHERE id = $1").bind(scene).fetch_optional(&st.db).await.unwrap_or(None);
         if let Some((ids, custom)) = sp.filter(|(ids, _)| !ids.is_empty()) {
             let text = custom.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| match &why {
-                AutoRun::Schedule(_) => format!("Đã chuyển sang chế độ {name}"),
+                AutoRun::Schedule(_) | AutoRun::Sensor(..) => format!("Đã chuyển sang chế độ {name}"),
                 AutoRun::Leave => format!("Mọi người đã rời nhà. Đã chuyển sang chế độ {name}"),
+                AutoRun::Arrive => format!("Chào mừng về nhà. Đã chuyển sang chế độ {name}"),
             });
             let _ = crate::speak::say(st, home, &ids, &text).await;
         }
@@ -173,6 +176,20 @@ pub async fn scene_auto_ran(st: &AppState, home: Uuid, scene: Uuid, why: AutoRun
     tokio::spawn(async move {
         push::notify_home(&st2, home, &title, &body, json!({"kind": kind, "home_id": home, "scene_id": scene})).await;
     });
+}
+
+/// (loại, tiêu đề, nội dung) của thông báo "ngữ cảnh tự chạy".
+fn auto_texts(why: &AutoRun, ok: bool, name: &str) -> (&'static str, String, String) {
+    let done = format!("Đã tự chuyển sang \"{name}\"");
+    let failed = format!("Không chuyển được sang \"{name}\"");
+    match (why, ok) {
+        (AutoRun::Schedule(t), _) => ("scene_auto", done, format!("Theo lịch {t}")),
+        (AutoRun::Leave, true) => ("scene_auto", done, "Không còn ai ở nhà".to_string()),
+        (AutoRun::Leave, false) => ("scene_failed", failed, "Mọi người đã rời nhà nhưng bộ điều khiển trung tâm đang offline".to_string()),
+        (AutoRun::Arrive, true) => ("scene_auto", done, "Có người vừa về nhà".to_string()),
+        (AutoRun::Arrive, false) => ("scene_failed", failed, "Có người vừa về nhà nhưng bộ điều khiển trung tâm đang offline".to_string()),
+        (AutoRun::Sensor(dev, what), _) => ("scene_auto", done, format!("{dev}: {what}")),
+    }
 }
 
 /// Xoá thông báo cũ (gọi định kỳ).
@@ -279,5 +296,14 @@ mod tests {
         assert!(b.contains("Cửa chính") && b.contains("Đi vắng"));
         let (t, _) = texts(Event::Presence, "Hành lang", "Đi ngủ");
         assert_eq!(t, "Phát hiện có người");
+    }
+
+    #[test]
+    fn auto_run_texts() {
+        let (k, t, b) = auto_texts(&AutoRun::Sensor("Cửa chính".into(), "cửa vừa mở"), true, "Về nhà");
+        assert_eq!((k, t.as_str(), b.as_str()), ("scene_auto", "Đã tự chuyển sang \"Về nhà\"", "Cửa chính: cửa vừa mở"));
+        let (k, _, b) = auto_texts(&AutoRun::Arrive, false, "Về nhà");
+        assert_eq!(k, "scene_failed");
+        assert!(b.contains("về nhà"));
     }
 }

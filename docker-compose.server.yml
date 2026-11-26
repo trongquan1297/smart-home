@@ -1,0 +1,24 @@
+# Ghi đè cho máy chủ triển khai (dùng cùng docker-compose.yml).
+# 8080/8081/5432 trên máy này đã thuộc về dịch vụ khác (shop-api, Postgres 13) nên:
+#   backend   công khai ở :18080
+#   simulator công khai ở :18081
+#   Postgres  không publish ra máy host (chỉ backend trong mạng compose truy cập)
+#   Mosquitto chỉ nghe 127.0.0.1:1883
+services:
+  postgres:
+    restart: unless-stopped
+    ports: !reset []
+  mosquitto:
+    restart: unless-stopped
+  backend:
+    restart: unless-stopped
+    ports: !override
+      - "18080:8080"
+  zigbee-sim:
+    restart: unless-stopped
+    ports: !override
+      - "18081:8080"
+  cast-sim:
+    restart: unless-stopped
+    ports: !override
+      - "18082:8082"

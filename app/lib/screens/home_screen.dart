@@ -62,7 +62,15 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final r = await m.runScene(picked);
       msg.showSnackBar(
-        SnackBar(content: Text(r['sent'] == r['total'] ? 'Đã bật "${picked.name}"' : 'Đã gửi ${r['sent']}/${r['total']} lệnh của "${picked.name}"')),
+        SnackBar(
+          content: Text(
+            r['status'] == 'running'
+                ? 'Đang bật lần lượt "${picked.name}"…'
+                : r['sent'] == r['total']
+                ? 'Đã bật "${picked.name}"'
+                : 'Đã gửi ${r['sent']}/${r['total']} lệnh của "${picked.name}"',
+          ),
+        ),
       );
     } catch (e) {
       msg.showSnackBar(SnackBar(content: Text(e.toString().contains('gateway offline') ? 'Bộ điều khiển trung tâm đang offline' : e.toString())));
