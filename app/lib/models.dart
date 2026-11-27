@@ -647,6 +647,7 @@ class Scene {
   final String? autoTimeEnd; // "HH:MM" kết thúc khung giờ; null = chỉ mốc giờ
   final List<SceneSensorTrigger> triggerSensors;
   final String triggerLogic; // any = HOẶC, all = VÀ
+  final bool skipIfActive; // không tự chạy lại khi ngữ cảnh này đang bật
 
   Scene({
     required this.id,
@@ -668,6 +669,7 @@ class Scene {
     this.autoTimeEnd,
     this.triggerSensors = const [],
     this.triggerLogic = 'any',
+    this.skipIfActive = false,
   });
 
   /// Số điều kiện tự kích hoạt đang bật.
@@ -698,6 +700,7 @@ class Scene {
       for (final t in (j['trigger_sensors'] as List? ?? [])) SceneSensorTrigger.fromJson(Map<String, dynamic>.from(t)),
     ],
     triggerLogic: j['trigger_logic'] ?? 'any',
+    skipIfActive: j['skip_if_active'] == true,
   );
 
   SceneKind get kind => SceneKind.parse(icon);

@@ -75,9 +75,23 @@ class SsoService {
       if (token == null || token.isEmpty) throw Exception('Google không trả về ID token');
       return SsoCredential('google', token, nonce: Platform.isIOS ? _googleNonce : null, name: account.displayName);
     } on GoogleSignInException catch (e) {
-      if (e.code == GoogleSignInExceptionCode.canceled) throw SsoCancelled();
+      debugPrint('Google sign-in failed: ${e.code} ${e.description}');
+      if (e.code == GoogleSignInExceptionCode.canceled && !_isConfigError(e.description)) throw SsoCancelled();
+      if (_isConfigError(e.description)) {
+        // Android: Credential Manager báo lỗi cấu hình như là "huỷ"; người dùng đã chọn tài khoản nên phải báo rõ.
+        throw Exception(
+          'Google từ chối đăng nhập cho bản app này (${e.description}). '
+          'Cần đăng ký package com.newmoon22.msmart + SHA-1 của khoá ký app trong Google Cloud / Firebase.',
+        );
+      }
       rethrow;
     }
+  }
+
+  /// "[16] Account reauth failed" / "[10] DEVELOPER_ERROR": package + SHA-1 của khoá ký chưa khớp OAuth client Android.
+  static bool _isConfigError(String? description) {
+    final d = description ?? '';
+    return d.contains('[16]') || d.contains('[10]') || d.contains('reauth') || d.contains('DEVELOPER_ERROR');
   }
 
   static Future<SsoCredential> apple() async {

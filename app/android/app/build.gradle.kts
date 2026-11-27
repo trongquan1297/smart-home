@@ -1,3 +1,18 @@
+import java.io.FileInputStream
+import java.util.Properties
+
+// Upload key cho Google Play: android/key.properties (đã gitignore), dạng
+//   storeFile=C:/duong/dan/upload-keystore.jks
+//   storePassword=…
+//   keyAlias=upload
+//   keyPassword=…
+// Không có file này thì bản release ký bằng khoá debug (chạy thử được, KHÔNG upload lên Google Play được).
+val keystoreProperties = Properties().apply {
+    val f = rootProject.file("key.properties")
+    if (f.exists()) FileInputStream(f).use { load(it) }
+}
+val hasUploadKey = keystoreProperties.getProperty("storeFile") != null
+
 plugins {
     id("com.android.application")
     id("com.google.gms.google-services")
@@ -28,11 +43,20 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (hasUploadKey) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (hasUploadKey) "release" else "debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

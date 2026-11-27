@@ -252,6 +252,8 @@ class _SceneSheetState extends State<_SceneSheet> {
   late TimeOfDay? _end = _parse(widget.scene?.autoTimeEnd); // kết thúc khung giờ; null = chỉ mốc giờ
   late final List<SceneSensorTrigger> _sensorTriggers = [...?widget.scene?.triggerSensors];
   late String _logic = widget.scene?.triggerLogic ?? 'any'; // any = HOẶC, all = VÀ
+  late bool _skipIfActive = widget.scene?.skipIfActive ?? false; // không tự chạy lại khi ngữ cảnh này đang bật
+  bool _skipTouched = false; // người dùng đã tự gạt công tắc trên (không tự bật mặc định nữa)
   late final Set<String> _speakers = {...?widget.scene?.speakerIds}; // loa Cast đọc khi ngữ cảnh TỰ chạy
   late final TextEditingController _speakText = TextEditingController(text: widget.scene?.speakText ?? '');
   late int _stepDelay = widget.scene?.stepDelayMs ?? 0; // ms giữa các gang khi chạy; 0 = cùng lúc
@@ -327,6 +329,7 @@ class _SceneSheetState extends State<_SceneSheet> {
           if (sensorIds.contains(t.deviceId)) t.toJson(),
       ],
       'trigger_logic': _logic,
+      'skip_if_active': _skipIfActive,
       // Chỉ giữ loa còn tồn tại (loa đã xoá sẽ bị máy chủ từ chối); câu rỗng = xoá câu tuỳ chỉnh.
       'speaker_ids': _speakers.where(m.speakers.map((x) => x.id).toSet().contains).toList(),
       'speak_text': _speakText.text.trim(),
@@ -385,6 +388,32 @@ class _SceneSheetState extends State<_SceneSheet> {
           onChanged: (v) => setState(() => v ? _alerts.add(d.id) : _alerts.remove(d.id)),
         ),
     ];
+  }
+
+  /// Nút biểu tượng cạnh ô tên: chỉ hiện icon; bấm mở danh sách icon + loại ngữ cảnh.
+  Widget _kindPicker(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return PopupMenuButton<SceneKind>(
+      tooltip: 'Biểu tượng: ${_kind.label}',
+      initialValue: _kind,
+      position: PopupMenuPosition.under,
+      onSelected: (k) => setState(() => _kind = k),
+      itemBuilder: (_) => [
+        for (final k in SceneKind.values)
+          PopupMenuItem(
+            value: k,
+            child: Row(
+              children: [
+                IconBadge(k.icon, colors: sceneColors(k.id), size: 32),
+                const SizedBox(width: 12),
+                Expanded(child: Text(k.label)),
+                if (k == _kind) Icon(Icons.check_rounded, color: cs.primary, size: 20),
+              ],
+            ),
+          ),
+      ],
+      child: IconBadge(_kind.icon, colors: sceneColors(_kind.id), size: 52),
+    );
   }
 
   /// Bật/tắt lần lượt: giãn cách giữa từng gang khi ngữ cảnh chạy, để đèn không bật/tắt đồng loạt.
@@ -685,6 +714,7 @@ class _SceneSheetState extends State<_SceneSheet> {
           } else if (sensors.isNotEmpty) {
             final d = sensors.first;
             _sensorTriggers.add(SceneSensorTrigger(d.id, d.hasDoor ? 'open' : 'occupied'));
+            _defaultSkipForSensors();
           }
         }),
         children: [
@@ -697,6 +727,7 @@ class _SceneSheetState extends State<_SceneSheet> {
                 onSelected: (id) => setState(() {
                   final d = byId[id]!;
                   _sensorTriggers.add(SceneSensorTrigger(id, d.hasDoor ? 'open' : 'occupied'));
+                  _defaultSkipForSensors();
                 }),
                 itemBuilder: (_) => [for (final d in sensors) PopupMenuItem(value: d.id, child: Text(d.name))],
                 child: Padding(
@@ -714,8 +745,45 @@ class _SceneSheetState extends State<_SceneSheet> {
             ),
         ],
       ),
+      if (_triggerCount > 0)
+        Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+          decoration: BoxDecoration(color: cs.surfaceContainerHighest.withValues(alpha: .4), borderRadius: BorderRadius.circular(16)),
+          child: Row(
+            children: [
+              const IconBadge(Icons.repeat_one_rounded, colors: Vivid.scene, size: 34),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Không chạy lại khi đang bật', style: TextStyle(fontWeight: FontWeight.w700)),
+                    Text(
+                      'Bỏ qua nếu đây đã là chế độ đang bật; chạy lại sau khi một ngữ cảnh khác được bật. '
+                      'Vd "Về nhà" theo cửa mở chỉ chạy lần mở cửa đầu tiên.',
+                      style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+              Switch(
+                value: _skipIfActive,
+                onChanged: (v) => setState(() {
+                  _skipIfActive = v;
+                  _skipTouched = true;
+                }),
+              ),
+            ],
+          ),
+        ),
       const SizedBox(height: 8),
     ];
+  }
+
+  /// Ngữ cảnh mới có điều kiện cảm biến: mặc định không chạy lại khi đang bật (cửa mở nhiều lần), trừ khi người dùng đã tự chọn.
+  void _defaultSkipForSensors() {
+    if (!_editing && !_skipTouched) _skipIfActive = true;
   }
 
   /// Một điều kiện cảm biến: tên + chọn trạng thái (có người / hết người, cửa mở / đóng) + bỏ.
@@ -829,142 +897,143 @@ class _SceneSheetState extends State<_SceneSheet> {
       constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * .92),
       child: Padding(
         padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(context).viewInsets.bottom),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(_editing ? 'Sửa ngữ cảnh' : 'Ngữ cảnh mới', style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _name,
-                autofocus: !_editing,
-                textCapitalization: TextCapitalization.sentences,
-                maxLength: 60,
-                decoration: const InputDecoration(labelText: 'Tên ngữ cảnh', hintText: 'vd: Đi ngủ', counterText: ''),
-              ),
-              const SizedBox(height: 16),
-              const SectionHeader(icon: Icons.palette_rounded, colors: Vivid.scene, title: 'Biểu tượng'),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final k in SceneKind.values)
-                    ChoiceChip(
-                      showCheckmark: false,
-                      avatar: Icon(k.icon, size: 18, color: k == _kind ? cs.onPrimaryContainer : sceneColors(k.id).first),
-                      label: Text(k.label),
-                      selected: k == _kind,
-                      onSelected: (_) => setState(() => _kind = k),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              SectionHeader(
-                icon: Icons.toggle_on_rounded,
-                colors: Vivid.device,
-                title: 'Thiết bị',
-                info:
-                    'Với mỗi gang công tắc chọn Bật hoặc Tắt; với rèm chọn Mở hoặc Đóng; bỏ trống để giữ nguyên.${others.isEmpty ? '' : '\n\n${others.length} thiết bị không có công tắc bật/tắt nên không đưa vào ngữ cảnh: ${others.map((d) => d.name).join(', ')}.'}',
-              ),
-              if (devices.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: Text('Căn hộ chưa có công tắc nào.', style: TextStyle(color: cs.onSurfaceVariant)),
-                ),
-              for (final d in devices)
-                Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-                  decoration: BoxDecoration(color: cs.surfaceContainerHighest.withValues(alpha: .4), borderRadius: BorderRadius.circular(16)),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(d.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                      Text(rooms[d.roomId] ?? 'Chưa phân phòng', style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
-                      const SizedBox(height: 8),
-                      if (d.isCover)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 6),
-                          child: Row(
-                            children: [
-                              const Expanded(child: Text('Rèm / cửa cuốn')),
-                              SegmentedButton<String>(
-                                showSelectedIcon: false,
-                                style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                                emptySelectionAllowed: true,
-                                segments: const [
-                                  ButtonSegment(value: 'OPEN', label: Text('Mở')),
-                                  ButtonSegment(value: 'CLOSE', label: Text('Đóng')),
-                                ],
-                                selected: {if (_plan[d.id]?['state'] != null) _plan[d.id]!['state']!},
-                                onSelectionChanged: (s) => _set(d.id, 'state', s.isEmpty ? null : s.first),
-                              ),
-                            ],
+        // Nội dung cuộn; lỗi + hàng nút Xoá/Huỷ/Lưu ghim ở đáy, luôn thấy khi cuộn.
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(_editing ? 'Sửa ngữ cảnh' : 'Ngữ cảnh mới', style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        _kindPicker(context),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: TextField(
+                            controller: _name,
+                            autofocus: !_editing,
+                            textCapitalization: TextCapitalization.sentences,
+                            maxLength: 60,
+                            decoration: const InputDecoration(labelText: 'Tên ngữ cảnh', hintText: 'vd: Đi ngủ', counterText: ''),
                           ),
                         ),
-                      for (final key in d.switchKeys)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 6),
-                          child: Row(
-                            children: [
-                              Expanded(child: Text(d.labelFor(key), overflow: TextOverflow.ellipsis)),
-                              SegmentedButton<String>(
-                                showSelectedIcon: false,
-                                style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                                emptySelectionAllowed: true,
-                                segments: const [
-                                  ButtonSegment(value: 'ON', label: Text('Bật')),
-                                  ButtonSegment(value: 'OFF', label: Text('Tắt')),
-                                ],
-                                selected: {if (_plan[d.id]?[key] != null) _plan[d.id]![key]!},
-                                onSelectionChanged: (s) => _set(d.id, key, s.isEmpty ? null : s.first),
-                              ),
-                            ],
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              if (missing > 0)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(
-                    '$missing thiết bị trong ngữ cảnh đã bị xoá khỏi căn hộ; chúng sẽ bị bỏ khi bạn lưu.',
-                    style: tt.bodySmall?.copyWith(color: cs.error),
-                  ),
-                ),
-              const SizedBox(height: 12),
-              ..._staggerSection(context),
-              ..._alertSection(context),
-              const SizedBox(height: 4),
-              ..._triggerSection(context),
-              const Divider(height: 24),
-              ..._speakSection(context),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: Text(_error!, style: TextStyle(color: cs.error)),
-                ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  if (_editing)
-                    TextButton.icon(
-                      style: TextButton.styleFrom(foregroundColor: cs.error),
-                      onPressed: _busy ? null : _delete,
-                      icon: const Icon(Icons.delete_outline_rounded),
-                      label: const Text('Xoá'),
+                      ],
                     ),
-                  const Spacer(),
-                  TextButton(onPressed: _busy ? null : () => Navigator.pop(context), child: const Text('Huỷ')),
-                  const SizedBox(width: 8),
-                  FilledButton(onPressed: _busy ? null : _save, child: Text(_editing ? 'Lưu' : 'Tạo')),
-                ],
+                    const SizedBox(height: 20),
+                    SectionHeader(
+                      icon: Icons.toggle_on_rounded,
+                      colors: Vivid.device,
+                      title: 'Thiết bị',
+                      info:
+                          'Với mỗi gang công tắc chọn Bật hoặc Tắt; với rèm chọn Mở hoặc Đóng; bỏ trống để giữ nguyên.${others.isEmpty ? '' : '\n\n${others.length} thiết bị không có công tắc bật/tắt nên không đưa vào ngữ cảnh: ${others.map((d) => d.name).join(', ')}.'}',
+                    ),
+                    if (devices.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: Text('Căn hộ chưa có công tắc nào.', style: TextStyle(color: cs.onSurfaceVariant)),
+                      ),
+                    for (final d in devices)
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+                        decoration: BoxDecoration(color: cs.surfaceContainerHighest.withValues(alpha: .4), borderRadius: BorderRadius.circular(16)),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(d.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                            Text(rooms[d.roomId] ?? 'Chưa phân phòng', style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
+                            const SizedBox(height: 8),
+                            if (d.isCover)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 6),
+                                child: Row(
+                                  children: [
+                                    const Expanded(child: Text('Rèm / cửa cuốn')),
+                                    SegmentedButton<String>(
+                                      showSelectedIcon: false,
+                                      style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                                      emptySelectionAllowed: true,
+                                      segments: const [
+                                        ButtonSegment(value: 'OPEN', label: Text('Mở')),
+                                        ButtonSegment(value: 'CLOSE', label: Text('Đóng')),
+                                      ],
+                                      selected: {if (_plan[d.id]?['state'] != null) _plan[d.id]!['state']!},
+                                      onSelectionChanged: (s) => _set(d.id, 'state', s.isEmpty ? null : s.first),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            for (final key in d.switchKeys)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 6),
+                                child: Row(
+                                  children: [
+                                    Expanded(child: Text(d.labelFor(key), overflow: TextOverflow.ellipsis)),
+                                    SegmentedButton<String>(
+                                      showSelectedIcon: false,
+                                      style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                                      emptySelectionAllowed: true,
+                                      segments: const [
+                                        ButtonSegment(value: 'ON', label: Text('Bật')),
+                                        ButtonSegment(value: 'OFF', label: Text('Tắt')),
+                                      ],
+                                      selected: {if (_plan[d.id]?[key] != null) _plan[d.id]![key]!},
+                                      onSelectionChanged: (s) => _set(d.id, key, s.isEmpty ? null : s.first),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    if (missing > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          '$missing thiết bị trong ngữ cảnh đã bị xoá khỏi căn hộ; chúng sẽ bị bỏ khi bạn lưu.',
+                          style: tt.bodySmall?.copyWith(color: cs.error),
+                        ),
+                      ),
+                    const SizedBox(height: 12),
+                    ..._staggerSection(context),
+                    ..._alertSection(context),
+                    const SizedBox(height: 4),
+                    ..._triggerSection(context),
+                    const Divider(height: 24),
+                    ..._speakSection(context),
+                  ],
+                ),
               ),
-            ],
-          ),
+            ),
+            const Divider(height: 1),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(_error!, style: TextStyle(color: cs.error)),
+              ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                if (_editing)
+                  TextButton.icon(
+                    style: TextButton.styleFrom(foregroundColor: cs.error),
+                    onPressed: _busy ? null : _delete,
+                    icon: const Icon(Icons.delete_outline_rounded),
+                    label: const Text('Xoá'),
+                  ),
+                const Spacer(),
+                TextButton(onPressed: _busy ? null : () => Navigator.pop(context), child: const Text('Huỷ')),
+                const SizedBox(width: 8),
+                FilledButton(onPressed: _busy ? null : _save, child: Text(_editing ? 'Lưu' : 'Tạo')),
+              ],
+            ),
+          ],
         ),
       ),
     );

@@ -111,10 +111,22 @@ pub struct Cond {
     pub trigger_sensors: Value,
     pub timezone: String,
     pub last_run_at: Option<DateTime<Utc>>,
+    /// Không tự chạy lại khi đang là chế độ đang bật.
+    pub skip_if_active: bool,
+    /// Đang là chế độ đang bật của căn hộ (`homes.active_scene_id`).
+    pub is_active: bool,
+}
+
+impl Cond {
+    /// Bỏ qua lần tự chạy này vì ngữ cảnh đã đang bật.
+    pub fn skip_because_active(&self) -> bool {
+        self.skip_if_active && self.is_active
+    }
 }
 
 pub const COND_SELECT: &str = "SELECT s.id, s.home_id, s.actions, s.step_delay_ms, s.trigger_logic, s.auto_enabled, s.auto_time, s.auto_time_end,
-        s.auto_days, s.auto_leave, s.auto_arrive, s.trigger_sensors, h.timezone, s.last_run_at
+        s.auto_days, s.auto_leave, s.auto_arrive, s.trigger_sensors, h.timezone, s.last_run_at,
+        s.skip_if_active, COALESCE(h.active_scene_id = s.id, false) AS is_active
    FROM scenes s JOIN homes h ON h.id = s.home_id";
 
 impl Cond {
@@ -173,7 +185,9 @@ async fn fire(st: &AppState, c: &Cond, why: AutoRun) -> ApiResult<()> {
     let claimed = sqlx::query(
         "UPDATE scenes SET last_run_at = now(), last_status = 'running'
           WHERE id = $1 AND (last_run_at IS NULL OR last_status IS NULL OR last_status IN ('missed', 'skipped')
-                             OR last_run_at < now() - make_interval(secs => $2))",
+                             OR last_run_at < now() - make_interval(secs => $2))
+            -- \"Không chạy lại khi đang bật\": kiểm tra ngay lúc giành lượt (hai sự kiện cùng lúc không lọt)
+            AND NOT (skip_if_active AND EXISTS(SELECT 1 FROM homes h WHERE h.id = scenes.home_id AND h.active_scene_id = scenes.id))",
     )
     .bind(c.id)
     .bind(COOLDOWN_SECS as f64)
@@ -217,6 +231,10 @@ pub async fn on_presence(st: &AppState, hid: Uuid, fired: Fired) {
     };
     let now = Utc::now();
     for c in rows {
+        if c.skip_because_active() {
+            tracing::info!(scene = %c.id, ?fired, "presence trigger: scene already active, skipped");
+            continue;
+        }
         match others_hold(st, &c, fired, now).await {
             Ok(true) => spawn_fire(st, c, why.clone()),
             Ok(false) => tracing::info!(scene = %c.id, ?fired, "presence trigger: other conditions not met"),
@@ -248,6 +266,10 @@ pub async fn on_state(st: &AppState, home: Uuid, device: Uuid, old: &Value, new:
     for c in rows {
         let hit = c.sensors().iter().enumerate().find(|(_, (d, ev))| *d == device && sensor_event(ev, old, new)).map(|(i, (_, ev))| (i, ev.clone()));
         let Some((i, ev)) = hit else { continue };
+        if c.skip_because_active() {
+            tracing::info!(scene = %c.id, "sensor trigger: scene already active, skipped");
+            continue;
+        }
         match others_hold(st, &c, Fired::Sensor(i), now).await {
             Ok(true) => spawn_fire(st, c, AutoRun::Sensor(name.clone(), sensor_label(&ev))),
             Ok(false) => tracing::debug!(scene = %c.id, "sensor trigger: other conditions not met"),
@@ -307,6 +329,31 @@ mod tests {
         assert!(!in_window(VN, t(22, 0), Some(t(6, 0)), &[5], utc("2026-11-14T00:00:00Z")));
         // 02:00 sáng thứ Sáu thuộc khung tối thứ Năm (4), không nằm trong [5]
         assert!(!in_window(VN, t(22, 0), Some(t(6, 0)), &[5], utc("2026-11-12T19:00:00Z")));
+    }
+
+    #[test]
+    fn skip_only_when_flag_and_active() {
+        let c = |skip: bool, active: bool| Cond {
+            id: Uuid::nil(),
+            home_id: Uuid::nil(),
+            actions: json!([]),
+            step_delay_ms: 0,
+            trigger_logic: "any".into(),
+            auto_enabled: false,
+            auto_time: None,
+            auto_time_end: None,
+            auto_days: vec![],
+            auto_leave: false,
+            auto_arrive: false,
+            trigger_sensors: json!([]),
+            timezone: VN.into(),
+            last_run_at: None,
+            skip_if_active: skip,
+            is_active: active,
+        };
+        assert!(c(true, true).skip_because_active());
+        assert!(!c(true, false).skip_because_active(), "chế độ khác đang bật → chạy");
+        assert!(!c(false, true).skip_because_active(), "không bật tuỳ chọn → chạy như cũ");
     }
 
     #[test]

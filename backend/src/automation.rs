@@ -224,12 +224,14 @@ pub struct SceneOut {
     speak_text: Option<String>,
     /// Giãn cách (ms) giữa các gang khi chạy; 0 = cùng lúc.
     step_delay_ms: i32,
+    /// Không tự chạy lại khi ngữ cảnh này đang là chế độ đang bật (chạy tay không bị ảnh hưởng).
+    skip_if_active: bool,
     /// Ngữ cảnh đang bật của căn hộ (chạy gần nhất); chỉ ngữ cảnh đang bật mới sinh cảnh báo.
     active: bool,
 }
 
 const SCENE_COLS: &str = "id, home_id, name, icon, actions, auto_enabled, to_char(auto_time, 'HH24:MI') AS auto_time, auto_days, last_run_at, last_status, alert_devices, auto_leave, speaker_ids, speak_text, step_delay_ms,
-    auto_arrive, to_char(auto_time_end, 'HH24:MI') AS auto_time_end, trigger_sensors, trigger_logic,
+    auto_arrive, to_char(auto_time_end, 'HH24:MI') AS auto_time_end, trigger_sensors, trigger_logic, skip_if_active,
     EXISTS(SELECT 1 FROM homes h WHERE h.active_scene_id = scenes.id) AS active";
 
 pub async fn list_scenes(State(st): State<AppState>, AuthUser(uid): AuthUser, Path(hid): Path<Uuid>) -> ApiResult<Json<Vec<SceneOut>>> {
@@ -264,6 +266,8 @@ pub struct SceneReq {
     speak_text: Option<String>,
     /// Giãn cách giữa các gang khi chạy (0..10000 ms); 0 = bật/tắt cùng lúc.
     step_delay_ms: Option<i32>,
+    /// Không tự chạy lại khi ngữ cảnh này đang bật.
+    skip_if_active: Option<bool>,
 }
 
 /// Mỗi cảm biến được chọn phải thuộc căn hộ và có thuộc tính `occupancy` hoặc `contact` (nhìn từ exposes).
@@ -424,8 +428,8 @@ pub async fn create_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, P
     // last_run_at = now(): tạo lúc 10:02 cho khung 10:00 thì không chạy "bù" lần đã qua.
     let s = sqlx::query_as(&format!(
         "INSERT INTO scenes (home_id, name, icon, actions, auto_enabled, auto_time, auto_days, last_run_at, alert_devices, auto_leave, speaker_ids, speak_text, step_delay_ms,
-                             auto_time_end, auto_arrive, trigger_sensors, trigger_logic)
-         VALUES ($1,$2,$3,$4,$5,$6,$7, now(), $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING {SCENE_COLS}"
+                             auto_time_end, auto_arrive, trigger_sensors, trigger_logic, skip_if_active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7, now(), $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING {SCENE_COLS}"
     ))
     .bind(hid)
     .bind(name)
@@ -443,6 +447,7 @@ pub async fn create_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, P
     .bind(cfg.arrive)
     .bind(&cfg.sensors)
     .bind(&cfg.logic)
+    .bind(b.skip_if_active.unwrap_or(false))
     .fetch_one(&st.db)
     .await?;
     Ok((StatusCode::CREATED, Json(s)))
@@ -509,7 +514,8 @@ pub async fn update_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, P
                speaker_ids = COALESCE($11, speaker_ids),
                speak_text = CASE WHEN $12::text IS NULL THEN speak_text ELSE NULLIF($12, '') END,
                step_delay_ms = COALESCE($13, step_delay_ms),
-               auto_time_end = $14, auto_arrive = $15, trigger_sensors = $16, trigger_logic = $17
+               auto_time_end = $14, auto_arrive = $15, trigger_sensors = $16, trigger_logic = $17,
+               skip_if_active = COALESCE($18, skip_if_active)
              WHERE id = $1 RETURNING {SCENE_COLS}"
         ))
         .bind(sid)
@@ -529,6 +535,7 @@ pub async fn update_scene(State(st): State<AppState>, AuthUser(uid): AuthUser, P
         .bind(cfg.arrive)
         .bind(&cfg.sensors)
         .bind(&cfg.logic)
+        .bind(b.skip_if_active)
         .fetch_one(&st.db)
         .await?,
     ))
@@ -636,8 +643,9 @@ async fn run_due(st: &AppState) -> ApiResult<()> {
             tracing::warn!(scene = %c.id, "scene auto-run missed (gateway offline or backend down at the scheduled time)");
             continue;
         }
-        // Kết hợp VÀ: các điều kiện khác phải đang đúng lúc đến giờ; không thì bỏ qua lần này (không chờ, không chạy bù).
-        if !triggers::others_hold(st, &c, triggers::Fired::Time, now).await? {
+        // "Không chạy lại khi đang bật", hoặc kết hợp VÀ mà các điều kiện khác chưa đúng lúc đến giờ: bỏ qua lần này
+        // (không chờ, không chạy bù).
+        if c.skip_because_active() || !triggers::others_hold(st, &c, triggers::Fired::Time, now).await? {
             sqlx::query("UPDATE scenes SET last_run_at = $2, last_status = 'skipped' WHERE id = $1 AND (last_run_at IS NULL OR last_run_at < $2)")
                 .bind(c.id)
                 .bind(at)

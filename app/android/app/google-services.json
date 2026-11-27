@@ -12,7 +12,12 @@
           "package_name": "com.newmoon22.msmart"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "511774696963-hhpar6mrcj9i3te566thasn676lc8jjg.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyDp_HBVg3_aGV_VMYi4Lt-DgiPZUE7B8Cs"
@@ -20,7 +25,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "511774696963-hhpar6mrcj9i3te566thasn676lc8jjg.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "511774696963-n5cu5mo2ej2j8m0e1vnha7fdd6c6d4i4.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.newmoon22.msmart"
+              }
+            }
+          ]
         }
       }
     }
